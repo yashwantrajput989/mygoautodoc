@@ -1,96 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
-
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* SAP Fiori 3 - Quartz Light / Horizon */
+    --background: 0 0% 97%;
+    --foreground: 210 11% 15%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 210 11% 15%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 210 11% 15%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* SAP Blue #0A6ED1 */
+    --primary: 210 88% 43%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 210 20% 95%;
+    --secondary-foreground: 210 11% 15%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 210 14% 93%;
+    --muted-foreground: 210 8% 46%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 28 92% 48%;
+    --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    /* Semantic status colors */
+    --success: 152 77% 28%;
+    --success-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --warning: 26 100% 45%;
+    --warning-foreground: 0 0% 100%;
 
-    --radius: 0.5rem;
+    --destructive: 0 100% 37%;
+    --destructive-foreground: 0 0% 100%;
 
-    --sidebar-background: 0 0% 98%;
+    --info: 210 88% 43%;
+    --info-foreground: 0 0% 100%;
 
-    --sidebar-foreground: 240 5.3% 26.1%;
+    --border: 210 14% 89%;
+    --input: 210 14% 89%;
+    --ring: 210 88% 43%;
 
-    --sidebar-primary: 240 5.9% 10%;
+    --radius: 0.25rem;
 
-    --sidebar-primary-foreground: 0 0% 98%;
+    /* Shell */
+    --shell-bar: 210 11% 15%;
+    --shell-bar-foreground: 0 0% 100%;
 
-    --sidebar-accent: 240 4.8% 95.9%;
+    /* Sidebar */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 210 8% 46%;
+    --sidebar-primary: 210 88% 43%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 20% 95%;
+    --sidebar-accent-foreground: 210 11% 15%;
+    --sidebar-border: 210 14% 89%;
+    --sidebar-ring: 210 88% 43%;
 
-    --sidebar-accent-foreground: 240 5.9% 10%;
+    /* KPI Tile */
+    --kpi-tile: 0 0% 100%;
+    --kpi-tile-foreground: 210 11% 15%;
+    --kpi-tile-border: 210 14% 93%;
 
-    --sidebar-border: 220 13% 91%;
+    /* Table */
+    --table-header: 210 14% 96%;
+    --table-row-hover: 210 20% 97%;
+    --table-row-selected: 210 88% 96%;
 
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    /* Fiori spacing */
+    --spacing-xs: 0.25rem;
+    --spacing-sm: 0.5rem;
+    --spacing-md: 1rem;
+    --spacing-lg: 1.5rem;
+    --spacing-xl: 2rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
+    --background: 210 11% 10%;
+    --foreground: 210 14% 93%;
+    --card: 210 11% 14%;
+    --card-foreground: 210 14% 93%;
+    --popover: 210 11% 14%;
+    --popover-foreground: 210 14% 93%;
+    --primary: 210 88% 53%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 11% 20%;
+    --secondary-foreground: 210 14% 93%;
+    --muted: 210 11% 20%;
+    --muted-foreground: 210 8% 60%;
+    --accent: 28 92% 55%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 80% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 11% 22%;
+    --input: 210 11% 22%;
+    --ring: 210 88% 53%;
+    --sidebar-background: 210 11% 12%;
+    --sidebar-foreground: 210 8% 60%;
+    --sidebar-primary: 210 88% 53%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 210 11% 18%;
+    --sidebar-accent-foreground: 210 14% 93%;
+    --sidebar-border: 210 11% 22%;
+    --sidebar-ring: 210 88% 53%;
   }
 }
 
@@ -100,6 +117,91 @@ All colors MUST be HSL.
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', '72', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  h1 {
+    @apply text-2xl font-semibold text-foreground;
+  }
+
+  h2 {
+    @apply text-lg font-semibold text-foreground;
+  }
+
+  h3 {
+    @apply text-base font-medium text-foreground;
+  }
+}
+
+@layer components {
+  .fiori-page {
+    @apply p-6 space-y-6;
+  }
+
+  .fiori-page-title {
+    @apply text-2xl font-semibold text-foreground;
+  }
+
+  .fiori-section-title {
+    @apply text-lg font-semibold text-foreground mb-4;
+  }
+
+  .fiori-label {
+    @apply text-xs font-medium uppercase tracking-wider text-muted-foreground;
+  }
+
+  .fiori-card {
+    @apply bg-card rounded border border-border shadow-sm;
+  }
+
+  .fiori-kpi-tile {
+    @apply bg-card rounded border border-border shadow-sm p-5;
+  }
+
+  .fiori-status-success {
+    @apply text-success bg-success/10 border-success/20;
+  }
+
+  .fiori-status-error {
+    @apply text-destructive bg-destructive/10 border-destructive/20;
+  }
+
+  .fiori-status-warning {
+    @apply text-warning bg-warning/10 border-warning/20;
+  }
+
+  .fiori-status-info {
+    @apply text-primary bg-primary/10 border-primary/20;
+  }
+
+  .fiori-smart-table {
+    @apply w-full border-collapse;
+  }
+
+  .fiori-smart-table th {
+    @apply text-xs font-semibold uppercase tracking-wider text-muted-foreground bg-muted/50 px-4 py-3 text-left border-b;
+  }
+
+  .fiori-smart-table td {
+    @apply px-4 py-3 text-sm border-b border-border;
+  }
+
+  .fiori-smart-table tr:hover {
+    @apply bg-muted/30;
+  }
+
+  .fiori-filter-bar {
+    @apply flex items-center gap-3 p-4 bg-card rounded border border-border flex-wrap;
+  }
+
+  .fiori-object-page-header {
+    @apply bg-card border-b border-border p-6;
+  }
+
+  .fiori-object-page-section {
+    @apply bg-card rounded border border-border p-6;
   }
 }
