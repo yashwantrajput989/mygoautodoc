@@ -1,73 +1,115 @@
-# Welcome to your Lovable project
+# MY DocSyncAI - Inbox to SAP Automation
 
-## Project info
+This project is a Document Automation system designed to streamline the transition from incoming documents (inbox) to SAP systems.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Key Features
 
-## How can I edit this code?
+- **Document Ingestion**: Seamless syncing of document data from Gmail and Outlook.
+- **AI-Powered Analysis**: Extracting key information using Google Gemini AI models.
+- **SAP Integration**: Automated data entry and processing for SAP S/4HANA.
+- **Monitoring & Analytics**: Real-time dashboards for document flow.
 
-There are several ways of editing your application.
+## Getting Started
 
-**Use Lovable**
+### Prerequisites
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+- Node.js (≥18.x) & npm installed
 
-Changes made via Lovable will be committed automatically to this repo.
+### Installation
 
-**Use your preferred IDE**
+1. Clone the repository
+2. Install frontend dependencies:
+   ```sh
+   npm install
+   ```
+3. Install backend dependencies:
+   ```sh
+   cd backend
+   npm install
+   ```
+4. Configure environment variables in `backend/.env`:
+   ```
+   GEMINI_API_KEY=your_gemini_api_key
+   OUTLOOK_CLIENT_ID=your_azure_client_id
+   OUTLOOK_CLIENT_SECRET=your_azure_client_secret
+   OUTLOOK_TENANT_ID=your_azure_tenant_id
+   OUTLOOK_REDIRECT_URI=http://localhost:8000/api/auth/callback
+   ```
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Running the Application
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
+**Start the backend server:**
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+cd backend
+node app.js server
+```
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+**Start the frontend dev server:**
+```sh
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+**One-shot CLI commands:**
+```sh
+cd backend
+node app.js phase1   # Run email ingestion once
+node app.js phase2   # Run AI analysis once
+node app.js sync     # Run full sync (phase1 + phase2) once
+```
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Technologies Used
 
-**Use GitHub Codespaces**
+- **Frontend**: Vite, React, TypeScript, Tailwind CSS, shadcn/ui
+- **Backend**: Node.js, Express
+- **AI**: Google Gemini (gemini-3-flash-preview)
+- **Email**: Gmail (IMAP), Microsoft Outlook (Graph API + OAuth 2.0)
+## Production Deployment (AWS EC2)
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+### 1. Build the Frontend
+From the root directory, generate the production build:
+```sh
+npm run build
+```
+This creates a `dist/` folder which the backend will automatically detect and serve.
 
-## What technologies are used for this project?
+### 2. Environment Variables
+On your EC2 instance, ensure `backend/.env` is configured with production values:
+```env
+GEMINI_API_KEY=your_production_key
+FRONTEND_URL=https://your-domain.com
+OUTLOOK_REDIRECT_URI=https://your-domain.com/api/auth/callback
+# Azure App Registration details
+OUTLOOK_CLIENT_ID=...
+OUTLOOK_CLIENT_SECRET=...
+```
 
-This project is built with:
+### 3. Start with PM2
+Use the provided `ecosystem.config.cjs` to manage the process:
+```sh
+# Install PM2 globally if not already
+npm install -g pm2
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+# Start the application
+pm2 start ecosystem.config.cjs
 
-## How can I deploy this project?
+# Save the process list to restart on reboot
+pm2 save
+pm2 startup
+```
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+### 4. Nginx Configuration
+Set up Nginx as a reverse proxy to port 8000:
+```nginx
+server {
+    server_name your-domain.com;
 
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```

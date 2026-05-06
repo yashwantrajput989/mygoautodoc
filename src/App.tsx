@@ -7,7 +7,6 @@ import { AppShell } from "@/components/layout/AppShell";
 import Dashboard from "./pages/Dashboard";
 import Documents from "./pages/Documents";
 import DocumentDetail from "./pages/DocumentDetail";
-import ManualReview from "./pages/ManualReview";
 import DuplicateMonitor from "./pages/DuplicateMonitor";
 import Analytics from "./pages/Analytics";
 import SettingsPage from "./pages/Settings";
@@ -24,9 +23,9 @@ const App = () => (
         <AppShell>
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/documents" element={<Documents />} />
             <Route path="/documents/:id" element={<DocumentDetail />} />
-            <Route path="/manual-review" element={<ManualReview />} />
             <Route path="/duplicate-monitor" element={<DuplicateMonitor />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/settings" element={<SettingsPage />} />

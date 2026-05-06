@@ -6,73 +6,74 @@
 
 @layer base {
   :root {
-    /* SAP Fiori 3 - Quartz Light / Horizon */
-    --background: 0 0% 97%;
-    --foreground: 210 11% 15%;
+    /* DocSyncAI Branding - White and Orange Theme */
+    --background: 0 0% 100%;
+    --foreground: 195 67% 15%;
 
     --card: 0 0% 100%;
-    --card-foreground: 210 11% 15%;
+    --card-foreground: 195 67% 15%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 210 11% 15%;
+    --popover-foreground: 195 67% 15%;
 
-    /* SAP Blue #0A6ED1 */
-    --primary: 210 88% 43%;
+    /* Primary: Orange #F36C21 - For buttons and active states */
+    --primary: 21 90% 54%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 20% 95%;
-    --secondary-foreground: 210 11% 15%;
+    --secondary: 21 20% 97%;
+    --secondary-foreground: 195 67% 15%;
 
-    --muted: 210 14% 93%;
-    --muted-foreground: 210 8% 46%;
+    --muted: 195 6% 95%;
+    --muted-foreground: 195 8% 46%;
 
-    --accent: 28 92% 48%;
+    /* Accent: Dark Teal #104050 */
+    --accent: 195 67% 19%;
     --accent-foreground: 0 0% 100%;
 
     /* Semantic status colors */
     --success: 152 77% 28%;
     --success-foreground: 0 0% 100%;
 
-    --warning: 26 100% 45%;
+    --warning: 21 90% 54%;
     --warning-foreground: 0 0% 100%;
 
     --destructive: 0 100% 37%;
     --destructive-foreground: 0 0% 100%;
 
-    --info: 210 88% 43%;
+    --info: 195 67% 19%;
     --info-foreground: 0 0% 100%;
 
-    --border: 210 14% 89%;
-    --input: 210 14% 89%;
-    --ring: 210 88% 43%;
+    --border: 195 10% 90%;
+    --input: 195 10% 90%;
+    --ring: 21 90% 54%;
 
-    --radius: 0.25rem;
+    --radius: 0.5rem;
 
-    /* Shell */
-    --shell-bar: 210 11% 15%;
-    --shell-bar-foreground: 0 0% 100%;
+    /* Shell - White Header as requested */
+    --shell-bar: 0 0% 100%;
+    --shell-bar-foreground: 195 67% 15%;
 
     /* Sidebar */
     --sidebar-background: 0 0% 100%;
-    --sidebar-foreground: 210 8% 46%;
-    --sidebar-primary: 210 88% 43%;
+    --sidebar-foreground: 195 8% 46%;
+    --sidebar-primary: 21 90% 54%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 210 20% 95%;
-    --sidebar-accent-foreground: 210 11% 15%;
-    --sidebar-border: 210 14% 89%;
-    --sidebar-ring: 210 88% 43%;
+    --sidebar-accent: 21 10% 97%;
+    --sidebar-accent-foreground: 21 90% 54%;
+    --sidebar-border: 195 10% 90%;
+    --sidebar-ring: 21 90% 54%;
 
     /* KPI Tile */
     --kpi-tile: 0 0% 100%;
-    --kpi-tile-foreground: 210 11% 15%;
-    --kpi-tile-border: 210 14% 93%;
+    --kpi-tile-foreground: 195 67% 15%;
+    --kpi-tile-border: 195 14% 93%;
 
     /* Table */
-    --table-header: 210 14% 96%;
-    --table-row-hover: 210 20% 97%;
-    --table-row-selected: 210 88% 96%;
+    --table-header: 195 14% 96%;
+    --table-row-hover: 195 20% 97%;
+    --table-row-selected: 21 90% 96%;
 
-    /* Fiori spacing */
+    /* Spacing */
     --spacing-xs: 0.25rem;
     --spacing-sm: 0.5rem;
     --spacing-md: 1rem;
@@ -81,33 +82,33 @@
   }
 
   .dark {
-    --background: 210 11% 10%;
-    --foreground: 210 14% 93%;
-    --card: 210 11% 14%;
-    --card-foreground: 210 14% 93%;
-    --popover: 210 11% 14%;
-    --popover-foreground: 210 14% 93%;
-    --primary: 210 88% 53%;
+    --background: 195 67% 10%;
+    --foreground: 195 14% 93%;
+    --card: 195 67% 14%;
+    --card-foreground: 195 14% 93%;
+    --popover: 195 67% 14%;
+    --popover-foreground: 195 14% 93%;
+    --primary: 195 67% 25%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 11% 20%;
-    --secondary-foreground: 210 14% 93%;
-    --muted: 210 11% 20%;
-    --muted-foreground: 210 8% 60%;
-    --accent: 28 92% 55%;
+    --secondary: 195 11% 20%;
+    --secondary-foreground: 195 14% 93%;
+    --muted: 195 11% 20%;
+    --muted-foreground: 195 8% 60%;
+    --accent: 21 90% 64%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 80% 50%;
     --destructive-foreground: 0 0% 100%;
-    --border: 210 11% 22%;
-    --input: 210 11% 22%;
-    --ring: 210 88% 53%;
-    --sidebar-background: 210 11% 12%;
-    --sidebar-foreground: 210 8% 60%;
-    --sidebar-primary: 210 88% 53%;
+    --border: 195 11% 22%;
+    --input: 195 11% 22%;
+    --ring: 195 67% 35%;
+    --sidebar-background: 195 67% 12%;
+    --sidebar-foreground: 195 8% 60%;
+    --sidebar-primary: 195 67% 25%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 210 11% 18%;
-    --sidebar-accent-foreground: 210 14% 93%;
-    --sidebar-border: 210 11% 22%;
-    --sidebar-ring: 210 88% 53%;
+    --sidebar-accent: 195 11% 18%;
+    --sidebar-accent-foreground: 195 14% 93%;
+    --sidebar-border: 195 11% 22%;
+    --sidebar-ring: 195 67% 35%;
   }
 }
 
@@ -138,7 +139,7 @@
 
 @layer components {
   .fiori-page {
-    @apply p-6 space-y-6;
+    @apply p-6 space-y-6 flex-1 min-h-0 overflow-y-auto;
   }
 
   .fiori-page-title {

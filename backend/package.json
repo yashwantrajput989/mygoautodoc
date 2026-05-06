@@ -1,0 +1,21 @@
+{
+  "name": "docsyncai-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node app.js server",
+    "dev": "node --watch app.js server",
+    "phase1": "node app.js phase1",
+    "phase2": "node app.js phase2",
+    "sync": "node app.js sync"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.16.2",
+    "@google/genai": "^1.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "imap": "^0.8.19",
+    "mailparser": "^3.7.2"
+  }
+}
