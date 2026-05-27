@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   FileText,
@@ -7,20 +7,24 @@ import {
   Copy,
   BarChart3,
   Settings,
+  Globe,
   Search,
   Bell,
   User,
   ChevronLeft,
   Menu,
+  LogOut,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 const navItems = [
   { title: "Dashboard", path: "/", icon: LayoutDashboard },
   { title: "Documents", path: "/documents", icon: FileText },
   { title: "Duplicate Monitor", path: "/duplicate-monitor", icon: Copy },
   { title: "Analytics", path: "/analytics", icon: BarChart3 },
+  { title: "API Config", path: "/api-config", icon: Globe },
   { title: "Settings", path: "/settings", icon: Settings },
 ];
 
@@ -30,7 +34,18 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
+
+  const user = JSON.parse(localStorage.getItem("user") || '{"name":"Admin User","role":"Administrator"}');
+
+  const handleLogout = () => {
+    if (confirm("Are you sure you want to log out?")) {
+      localStorage.removeItem("user");
+      navigate("/login");
+      toast.success("Logged out successfully");
+    }
+  };
 
   return (
     <div className="min-h-screen flex flex-col w-full">
@@ -56,12 +71,22 @@ export function AppShell({ children }: AppShellProps) {
             <Bell className="h-5 w-5 text-muted-foreground" />
             <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-primary border-2 border-white" />
           </button>
-          <button className="flex items-center gap-3 p-1.5 rounded-full hover:bg-muted transition-colors border border-transparent hover:border-border ml-2 px-3">
-            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground">
-              <User className="h-4 w-4" />
+          <div className="flex items-center gap-3 p-1.5 rounded-full border border-border ml-2 px-3 bg-muted/20">
+            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground font-black text-xs">
+              {user.name ? user.name[0].toUpperCase() : "U"}
             </div>
-            <span className="text-sm font-medium hidden sm:inline">Admin User</span>
-          </button>
+            <div className="flex flex-col text-left">
+              <span className="text-xs font-bold text-foreground leading-none">{user.name || "Admin User"}</span>
+              <span className="text-[9px] text-muted-foreground font-semibold uppercase tracking-wider mt-0.5">{user.role || "Administrator"}</span>
+            </div>
+            <button 
+              onClick={handleLogout}
+              title="Log Out"
+              className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-destructive transition-colors ml-1"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </header>
 

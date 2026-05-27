@@ -25,6 +25,20 @@ export default function DocumentDetail() {
   const navigate = useNavigate();
   const [currentDoc, setCurrentDoc] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [emailsList, setEmailsList] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.emails && Array.isArray(data.emails)) {
+          setEmailsList(data.emails);
+        } else if (data.user_email) {
+          setEmailsList([{ email: data.user_email, active: true }]);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const fetchDocDetail = async () => {
     try {
@@ -89,6 +103,11 @@ export default function DocumentDetail() {
     );
   }
 
+  const isBodyOnly = currentDoc?.data?.is_body_only === true || currentDoc?.id?.startsWith('body_');
+  const recipientEmail = currentDoc?.data?.email_metadata?.recipient_email || currentDoc?.data?.recipient_email || currentDoc?.data?.email_metadata?.to || "";
+  const matchedEmail = emailsList.find(e => recipientEmail.toLowerCase().includes(e.email.toLowerCase()));
+  const isEmailActiveAndConnected = matchedEmail ? (matchedEmail.active !== false) : false;
+
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
       {/* Detail Header */}
@@ -131,34 +150,86 @@ export default function DocumentDetail() {
       <div className="flex-1 min-h-0 overflow-y-auto p-6">
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
           
-          {/* Left Side: Original PDF and Attachments */}
+          {/* Left Side: Original PDF and Attachments / Email Reader */}
           <div className="flex flex-col gap-6">
-            {/* PDF Viewer */}
-            <div className="fiori-card flex flex-col overflow-hidden bg-muted/10 min-h-[600px] shadow-sm">
-              <div className="p-3 border-b border-border flex items-center justify-between bg-card">
-                <span className="text-xs font-bold flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-primary" /> {currentDoc.is_pending ? "Ingested File (Pending Analysis)" : "Primary Source PDF"}
-                </span>
-                <a
-                  href={`${API_BASE}/${currentDoc.is_pending ? 'pending-docs' : 'pdf-docs'}/${currentDoc.id}.pdf`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[10px] uppercase font-bold text-primary hover:underline flex items-center gap-1"
-                >
-                  Full View <ExternalLink className="h-3 w-3" />
-                </a>
+            {isBodyOnly ? (
+              /* Beautiful raw intake email reader panel */
+              <div className="fiori-card flex flex-col overflow-hidden bg-background border border-border shadow-sm min-h-[600px] rounded-xl">
+                {/* Header */}
+                <div className="p-4 border-b border-border bg-card/60 flex items-center justify-between">
+                  <span className="text-xs font-black text-primary uppercase tracking-wider flex items-center gap-2">
+                    <Mail className="h-4 w-4" /> Raw Intake Email Body
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-primary/10 text-[9px] font-black text-primary border border-primary/20 uppercase tracking-tight">
+                    📄 Ingested via Body Keywords Match
+                  </span>
+                </div>
+                {/* Email Viewer */}
+                <div className="flex-1 p-6 space-y-6 overflow-y-auto">
+                  <div className="space-y-3 bg-muted/20 p-4 rounded-xl border border-border/80">
+                    <div className="grid grid-cols-6 gap-2 text-xs">
+                      <span className="col-span-1 font-bold text-muted-foreground uppercase text-[10px]">Subject:</span>
+                      <span className="col-span-5 font-bold text-foreground">{currentDoc.data.email_metadata?.subject || currentDoc.data.subject || "(No Subject)"}</span>
+                    </div>
+                    <div className="grid grid-cols-6 gap-2 text-xs border-t border-border/50 pt-2">
+                      <span className="col-span-1 font-bold text-muted-foreground uppercase text-[10px]">From:</span>
+                      <span className="col-span-5 font-medium text-foreground truncate">{currentDoc.data.email_metadata?.from || currentDoc.data.from || "Unknown"}</span>
+                    </div>
+                    <div className="grid grid-cols-6 gap-2 text-xs border-t border-border/50 pt-2">
+                      <span className="col-span-1 font-bold text-muted-foreground uppercase text-[10px]">To:</span>
+                      <span className="col-span-5 font-medium text-foreground truncate">{currentDoc.data.email_metadata?.recipient_email || currentDoc.data.email_metadata?.to || "Self (Admin)"}</span>
+                    </div>
+                    <div className="grid grid-cols-6 gap-2 text-xs border-t border-border/50 pt-2">
+                      <span className="col-span-1 font-bold text-muted-foreground uppercase text-[10px]">Date:</span>
+                      <span className="col-span-5 text-muted-foreground font-medium">{currentDoc.data.email_metadata?.received_at || currentDoc.data.email_metadata?.date || "—"}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">Email Content Body</label>
+                    <div className="bg-card border border-border p-5 rounded-xl text-xs font-mono text-foreground whitespace-pre-wrap leading-relaxed min-h-[300px] max-h-[500px] overflow-y-auto shadow-inner">
+                      {currentDoc.data.email_metadata?.body || currentDoc.data.body || "No email body text available."}
+                    </div>
+                  </div>
+                  
+                  {currentDoc.data.email_metadata?.matched_keyword && (
+                    <div className="p-3 bg-emerald-100/10 border-l-4 border-emerald-500 rounded-r-lg flex items-center gap-2">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      <p className="text-[11px] font-semibold text-emerald-600">
+                        Triggered by matched keyword: <span className="font-mono bg-emerald-100/30 px-1.5 py-0.5 rounded border border-emerald-500/20">"{currentDoc.data.email_metadata.matched_keyword}"</span>
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="flex-1 bg-slate-200">
-                <iframe
-                  src={`${API_BASE}/${currentDoc.is_pending ? 'pending-docs' : 'pdf-docs'}/${currentDoc.id}.pdf#toolbar=0`}
-                  className="w-full h-full border-none"
-                  title="PDF Preview"
-                />
+            ) : (
+              /* PDF Viewer */
+              <div className="fiori-card flex flex-col overflow-hidden bg-muted/10 min-h-[600px] shadow-sm">
+                <div className="p-3 border-b border-border flex items-center justify-between bg-card">
+                  <span className="text-xs font-bold flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-primary" /> {currentDoc.is_pending ? "Ingested File (Pending Analysis)" : "Primary Source PDF"}
+                  </span>
+                  <a
+                    href={`${API_BASE}/${currentDoc.is_pending ? 'pending-docs' : 'pdf-docs'}/${currentDoc.id}.pdf`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[10px] uppercase font-bold text-primary hover:underline flex items-center gap-1"
+                  >
+                    Full View <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+                <div className="flex-1 bg-slate-200">
+                  <iframe
+                    src={`${API_BASE}/${currentDoc.is_pending ? 'pending-docs' : 'pdf-docs'}/${currentDoc.id}.pdf#toolbar=0`}
+                    className="w-full h-full border-none"
+                    title="PDF Preview"
+                  />
+                </div>
               </div>
-            </div>
+            )}
 
             {/* All Attachments List */}
-            {(currentDoc.data.email_metadata?.all_attachments || currentDoc.data.all_attachments) && (
+            {(currentDoc.data.email_metadata?.all_attachments || currentDoc.data.all_attachments) && (currentDoc.data.email_metadata?.all_attachments || currentDoc.data.all_attachments).length > 0 && (
               <div className="fiori-card p-4 shrink-0 shadow-sm">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
                   <Paperclip className="h-3.5 w-3.5" /> All Incoming Attachments ({(currentDoc.data.email_metadata?.all_attachments || currentDoc.data.all_attachments).length})
@@ -187,6 +258,17 @@ export default function DocumentDetail() {
                 <div className="flex items-center gap-2">
                   <Mail className="h-4 w-4 text-primary" />
                   <span className="text-xs font-bold uppercase tracking-tight text-primary">Full Source Email Metadata</span>
+                  {recipientEmail && (
+                    <div className="flex items-center gap-1 ml-2">
+                      <span className={cn(
+                        "w-2 h-2 rounded-full inline-block",
+                        isEmailActiveAndConnected ? "bg-emerald-500 shadow-[0_0_8px_#10b981]" : "bg-destructive shadow-[0_0_8px_#ef4444]"
+                      )} />
+                      <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider">
+                        {isEmailActiveAndConnected ? "Active & Connected" : "Inactive / Disconnected"}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div className="px-2 py-0.5 rounded-full bg-primary/10 text-[10px] font-bold text-primary">
                   {currentDoc.data.email_metadata?.message_id ? `ID: ${currentDoc.data.email_metadata.message_id.substring(0, 8)}...` : "Email Source"}

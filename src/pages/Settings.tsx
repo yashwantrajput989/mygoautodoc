@@ -18,6 +18,11 @@ import {
   ShieldCheck,
   CreditCard,
   Cpu,
+  Plus,
+  Trash2,
+  Activity,
+  Tag,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +33,7 @@ const sidebarItems = [
   { id: "ai", label: "AI Preferences", icon: Bot },
   { id: "prompts", label: "Manage Prompts", icon: MessageSquare },
   { id: "sources", label: "Manage Sources", icon: Database },
+  { id: "keywords", label: "Keywords Watchlist", icon: Tag },
   { id: "duplicates", label: "Duplicate Detection", icon: ShieldCheck },
   { id: "roles", label: "Manage Roles", icon: Key },
   { id: "credits", label: "Manage AI Credits", icon: Zap },
@@ -65,6 +71,7 @@ export default function SettingsPage() {
            {activeTab === "ai" && <AIPreferences />}
           {activeTab === "prompts" && <ManagePrompts />}
           {activeTab === "sources" && <ManageSources />}
+          {activeTab === "keywords" && <KeywordsWatchlist />}
           {activeTab === "duplicates" && <DuplicateDetectionSettings />}
           {activeTab === "roles" && <ManageRoles />}
           {activeTab === "credits" && <ManageCredits />}
@@ -298,196 +305,669 @@ function ManagePrompts() {
 }
 
 function ManageSources() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [server, setServer] = useState("imap.gmail.com");
-  const [activeSource, setActiveSource] = useState("Gmail");
+  const [emails, setEmails] = useState<any[]>([]);
   const [outlookConnected, setOutlookConnected] = useState(false);
   const [outlookUser, setOutlookUser] = useState("");
-  const [isTesting, setIsTesting] = useState(false);
-  const [isConnected, setIsConnected] = useState<boolean | null>(null);
-
-  const handleSourceChange = async (source: string) => {
-    setActiveSource(source);
-    try {
-      await fetch(`${API_BASE}/settings/email`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active_source: source }),
-      });
-      toast.success(`Source switched to ${source}`);
-    } catch (err) {
-      toast.error("Failed to update active source");
-    }
-  };
+  
+  // Add email wizard state
+  const [isAdding, setIsAdding] = useState(false);
+  const [addStep, setAddStep] = useState(1); // 1: Select Provider, 2: Routing Config, 3: Connection Info
+  const [selectedProvider, setSelectedProvider] = useState<"Gmail" | "Outlook">("Gmail");
+  
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newServer, setNewServer] = useState("imap.gmail.com");
+  const [newDocType, setNewDocType] = useState("Invoice");
+  const [newCompanyCode, setNewCompanyCode] = useState("");
+  
+  // Testing connection state map: email -> boolean
+  const [isTestingEmail, setIsTestingEmail] = useState<Record<string, boolean>>({});
+  const [emailStatus, setEmailStatus] = useState<Record<string, "Connected" | "Disconnected" | "Pending">>({});
 
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.user_email) setEmail(data.user_email);
-        if (data.imap_server) setServer(data.imap_server);
-        if (data.active_source) setActiveSource(data.active_source);
+        let currentEmails = data.emails || [];
+        
+        // Migrate legacy Gmail config if emails list is empty and user_email exists
+        if (currentEmails.length === 0 && data.user_email) {
+          currentEmails = [{
+            id: Date.now(),
+            email: data.user_email,
+            password: data.app_password || "",
+            server: data.imap_server || "imap.gmail.com",
+            expected_doc_type: "Invoice",
+            company_code: "",
+            active: true,
+            provider: "Gmail"
+          }];
+        }
+
         if (data.outlook_tokens) {
           setOutlookConnected(true);
-          setOutlookUser(data.outlook_tokens.user_principal_name);
+          setOutlookUser(data.outlook_tokens.user_principal_name || "");
         }
+
+        // Handle Outlook authentication callback success redirect
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('outlook') === 'success' && data.outlook_tokens) {
+          const pendingType = sessionStorage.getItem('pending_outlook_doctype') || 'Invoice';
+          const pendingCC = sessionStorage.getItem('pending_outlook_cc') || '';
+          
+          const newOutlookEmail = {
+            id: Date.now(),
+            email: data.outlook_tokens.user_principal_name || 'Outlook Mail',
+            provider: 'Outlook',
+            outlook_tokens: data.outlook_tokens,
+            expected_doc_type: pendingType,
+            company_code: pendingCC,
+            active: true
+          };
+
+          // Filter out existing email with same address to avoid duplicate
+          const updated = [
+            ...currentEmails.filter((e: any) => e.email !== newOutlookEmail.email),
+            newOutlookEmail
+          ];
+
+          // Save to backend and update state
+          fetch(`${API_BASE}/settings/email`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ emails: updated, outlook_tokens: null }), // Clear root outlook_tokens
+          }).then((res) => {
+            if (res.ok) {
+              toast.success(`Successfully connected Outlook account: ${newOutlookEmail.email}`);
+              setEmails(updated);
+            }
+          });
+
+          // Clear session storage and URL query
+          sessionStorage.removeItem('pending_outlook_doctype');
+          sessionStorage.removeItem('pending_outlook_cc');
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } else {
+          setEmails(currentEmails);
+        }
+
+        // Initialize statuses
+        currentEmails.forEach((eConf: any) => {
+          if (eConf.provider === 'Outlook') {
+            setEmailStatus(prev => ({ ...prev, [eConf.email]: "Connected" }));
+          } else {
+            setEmailStatus(prev => ({ ...prev, [eConf.email]: eConf.password ? "Connected" : "Disconnected" }));
+          }
+        });
+      })
+      .catch((err) => {
+        toast.error("Failed to load settings data");
       });
   }, []);
 
-  const handleSaveGmail = async () => {
+  const handleSaveEmails = async (updatedEmails: any[]) => {
     try {
       const res = await fetch(`${API_BASE}/settings/email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_email: email, app_password: password, imap_server: server }),
+        body: JSON.stringify({ emails: updatedEmails }),
       });
       if (res.ok) {
-        toast.success("Gmail configuration saved successfully");
+        toast.success("Email configurations updated successfully");
+        setEmails(updatedEmails);
       }
     } catch (err) {
-      toast.error("Failed to save settings");
+      toast.error("Failed to save email settings");
     }
   };
 
-  const handleTestGmail = async () => {
-    setIsTesting(true);
+  const handleTestEmail = async (emailConf: any) => {
+    if (emailConf.provider === "Outlook") {
+      toast.success(`Outlook account ${emailConf.email} is active via token authentication.`);
+      return;
+    }
+    setIsTestingEmail(prev => ({ ...prev, [emailConf.email]: true }));
+    setEmailStatus(prev => ({ ...prev, [emailConf.email]: "Pending" }));
     try {
       const res = await fetch(`${API_BASE}/settings/test-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_email: email, app_password: password, imap_server: server }),
+        body: JSON.stringify({
+          user_email: emailConf.email,
+          app_password: emailConf.password,
+          imap_server: emailConf.server
+        }),
       });
       const data = await res.json();
       if (data.status === "success") {
-        setIsConnected(true);
-        toast.success("Connection successful! Gmail is synced.");
+        setEmailStatus(prev => ({ ...prev, [emailConf.email]: "Connected" }));
+        toast.success(`Connection to ${emailConf.email} successful!`);
       } else {
-        setIsConnected(false);
-        toast.error("Connection failed: " + data.message);
+        setEmailStatus(prev => ({ ...prev, [emailConf.email]: "Disconnected" }));
+        toast.error(`Connection to ${emailConf.email} failed: ` + data.message);
       }
     } catch (err) {
-      setIsConnected(false);
-      toast.error("An error occurred during testing");
+      setEmailStatus(prev => ({ ...prev, [emailConf.email]: "Disconnected" }));
+      toast.error(`An error occurred testing ${emailConf.email}`);
     } finally {
-      setIsTesting(false);
+      setIsTestingEmail(prev => ({ ...prev, [emailConf.email]: false }));
     }
   };
 
-  const handleOutlookConnect = () => {
-    toast.info("Redirecting to Microsoft login...");
-    // Use direct redirect to avoid popup blockers
+  const handleAddEmailGmail = () => {
+    if (!newEmail.trim() || !newPassword.trim()) {
+      toast.error("Email and App Password are required for Gmail / IMAP");
+      return;
+    }
+    const emailObj = {
+      id: Date.now(),
+      email: newEmail.trim(),
+      password: newPassword,
+      server: newServer.trim() || "imap.gmail.com",
+      expected_doc_type: newDocType,
+      company_code: newCompanyCode.trim(),
+      active: true,
+      provider: "Gmail"
+    };
+    const updated = [...emails, emailObj];
+    handleSaveEmails(updated);
+    resetWizard();
+  };
+
+  const handleAddEmailOutlook = () => {
+    // Save choices to session storage so we retrieve them on success callback redirect
+    sessionStorage.setItem('pending_outlook_doctype', newDocType);
+    sessionStorage.setItem('pending_outlook_cc', newCompanyCode);
+    
+    toast.info("Redirecting to Microsoft secure sign-in portal...");
     window.location.href = `${API_BASE}/auth/outlook/login?redirect=true`;
+  };
+
+  const resetWizard = () => {
+    setNewEmail("");
+    setNewPassword("");
+    setNewServer("imap.gmail.com");
+    setNewDocType("Invoice");
+    setNewCompanyCode("");
+    setIsAdding(false);
+    setAddStep(1);
+  };
+
+  const handleDeleteEmail = (id: number) => {
+    if (!confirm("Are you sure you want to remove this email configuration?")) return;
+    const updated = emails.filter(e => e.id !== id);
+    handleSaveEmails(updated);
+  };
+
+  const handleToggleEmail = (id: number) => {
+    const updated = emails.map(e => e.id === id ? { ...e, active: !e.active } : e);
+    handleSaveEmails(updated);
+  };
+
+  const handleFieldChange = (id: number, field: string, value: string) => {
+    const updated = emails.map(e => e.id === id ? { ...e, [field]: value } : e);
+    setEmails(updated);
+  };
+
+  const handleBlurSave = () => {
+    handleSaveEmails(emails);
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="flex items-end justify-between">
+        <div>
+          <h2 className="text-2xl font-bold mb-1">Manage Sources</h2>
+          <p className="text-muted-foreground text-sm">Configure active email servers, provider types, document mapping, and SAP company routing</p>
+        </div>
+        {!isAdding && (
+          <button
+            onClick={() => setIsAdding(true)}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl text-xs font-bold transition-all shadow-md hover:shadow-lg active:scale-95"
+          >
+            <Plus className="h-4 w-4" /> Add Email Channel
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-6">
+        {/* Wizard Add Form */}
+        {isAdding && (
+          <div className="p-6 border border-border/80 bg-card/60 backdrop-blur-md rounded-2xl space-y-6 animate-in slide-in-from-top-4 duration-300 shadow-xl relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-red-500 via-primary to-blue-500" />
+            
+            {/* Header / Steps Indicator */}
+            <div className="flex items-center justify-between border-b border-border/50 pb-4">
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-primary">Add Email Intake Connection</h4>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Setup new ingestion channel routing rules</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={cn("w-2 h-2 rounded-full", addStep >= 1 ? "bg-primary" : "bg-muted")} />
+                <span className={cn("w-2 h-2 rounded-full", addStep >= 2 ? "bg-primary" : "bg-muted")} />
+                <span className={cn("w-2 h-2 rounded-full", addStep >= 3 ? "bg-primary" : "bg-muted")} />
+                <span className="text-[10px] font-bold text-muted-foreground ml-1">Step {addStep} of 3</span>
+              </div>
+            </div>
+
+            {/* STEP 1: SELECT PROVIDER */}
+            {addStep === 1 && (
+              <div className="space-y-4">
+                <label className="text-xs font-bold text-muted-foreground uppercase">Choose Email Provider Type</label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div
+                    onClick={() => { setSelectedProvider("Gmail"); setAddStep(2); }}
+                    className={cn(
+                      "p-5 rounded-xl border-2 cursor-pointer transition-all hover:scale-[1.02] flex items-start gap-4 bg-background/50",
+                      selectedProvider === "Gmail"
+                        ? "border-red-500/80 bg-red-500/5 shadow-md shadow-red-500/5"
+                        : "border-border hover:border-red-500/30"
+                    )}
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center text-red-600 shrink-0">
+                      <Mail className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h5 className="font-bold text-sm text-foreground">Gmail / IMAP Server</h5>
+                      <p className="text-xs text-muted-foreground mt-1">Connect standard inbox using custom host, username, and secure App Password credentialing.</p>
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => { setSelectedProvider("Outlook"); setAddStep(2); }}
+                    className={cn(
+                      "p-5 rounded-xl border-2 cursor-pointer transition-all hover:scale-[1.02] flex items-start gap-4 bg-background/50",
+                      selectedProvider === "Outlook"
+                        ? "border-blue-500/80 bg-blue-500/5 shadow-md shadow-blue-500/5"
+                        : "border-border hover:border-blue-500/30"
+                    )}
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600 shrink-0">
+                      <Globe className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h5 className="font-bold text-sm text-foreground">Microsoft Outlook (OAuth)</h5>
+                      <p className="text-xs text-muted-foreground mt-1">Secure, cloud-direct direct integration using official Microsoft Graph API single sign-on authentication.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 2: ROUTING CONFIG */}
+            {addStep === 2 && (
+              <div className="space-y-4">
+                <label className="text-xs font-bold text-muted-foreground uppercase block">Document Routing Rules</label>
+                <p className="text-xs text-muted-foreground mb-2">Define what document category is expected on this email channel and how it maps to your SAP organization code.</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase">Expected Doc Type</label>
+                    <select
+                      value={newDocType}
+                      onChange={(e) => setNewDocType(e.target.value)}
+                      className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-medium"
+                    >
+                      <option value="Invoice">Invoice</option>
+                      <option value="Sales Order">Sales Order</option>
+                      <option value="Purchase Order (PO)">Purchase Order (PO)</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase">SAP Company Code</label>
+                    <input
+                      value={newCompanyCode}
+                      onChange={(e) => setNewCompanyCode(e.target.value)}
+                      placeholder="e.g. 1000"
+                      className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-mono font-bold"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-between items-center pt-2">
+                  <button
+                    onClick={() => setAddStep(1)}
+                    className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-muted-foreground hover:bg-muted"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => setAddStep(3)}
+                    className="px-5 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-bold hover:bg-primary/95 shadow-sm"
+                  >
+                    Continue
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: CONNECTION INFO & FINISH */}
+            {addStep === 3 && (
+              <div className="space-y-4">
+                <label className="text-xs font-bold text-muted-foreground uppercase block">Connection Security details</label>
+                
+                {selectedProvider === "Gmail" ? (
+                  <div className="space-y-4">
+                    <p className="text-xs text-muted-foreground">Input standard server credentials. Be sure to use an App Password if connecting with an active Gmail mailbox.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Email Address</label>
+                        <input
+                          value={newEmail}
+                          onChange={(e) => setNewEmail(e.target.value)}
+                          placeholder="e.g. sales@company.com"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">App Password</label>
+                        <input
+                          type="password"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder="16-character secure password"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">IMAP Server Host</label>
+                        <input
+                          value={newServer}
+                          onChange={(e) => setNewServer(e.target.value)}
+                          placeholder="imap.gmail.com"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center pt-2">
+                      <button
+                        onClick={() => setAddStep(2)}
+                        className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-muted-foreground hover:bg-muted"
+                      >
+                        Back
+                      </button>
+                      <button
+                        onClick={handleAddEmailGmail}
+                        className="px-6 py-2 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700 shadow-md hover:shadow-lg transition-all"
+                      >
+                        Connect Gmail Server
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300 space-y-2 leading-relaxed">
+                      <p className="font-bold flex items-center gap-1.5">
+                        <Globe className="h-4 w-4" /> Secure Token-Based OAuth Redirection
+                      </p>
+                      <p>You will now be redirected to the secure Microsoft Account authentication landing page.</p>
+                      <p>Expected Document Type: <strong className="text-white">{newDocType}</strong> | Company Code: <strong className="text-white">{newCompanyCode || "None"}</strong></p>
+                    </div>
+                    
+                    <div className="flex justify-between items-center pt-2">
+                      <button
+                        onClick={() => setAddStep(2)}
+                        className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-muted-foreground hover:bg-muted"
+                      >
+                        Back
+                      </button>
+                      <button
+                        onClick={handleAddEmailOutlook}
+                        className="px-6 py-2.5 bg-[#0078d4] text-white rounded-lg text-xs font-bold hover:bg-[#005a9e] shadow-md hover:shadow-lg flex items-center gap-1.5 transition-all"
+                      >
+                        <Globe className="h-4 w-4" /> Sign In with Microsoft
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Cancel Button */}
+            <button
+              onClick={resetWizard}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground p-1 hover:bg-muted/80 rounded-md transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Unified Email channels list view */}
+        <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40 backdrop-blur-sm shadow-lg">
+          <div className="p-4 border-b border-border bg-muted/20 flex items-center justify-between">
+            <span className="text-xs font-bold text-foreground">Added Email Integration Channels</span>
+            <span className="text-[10px] text-muted-foreground font-semibold">{emails.length} channels configured</span>
+          </div>
+
+          {emails.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-muted/30 border-b border-border">
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-36">Provider</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-48">Expected Type</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Co. Code</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-32">Status</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-24">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {emails.map((eConf) => (
+                    <tr key={eConf.id} className="hover:bg-muted/10 transition-colors">
+                      <td className="p-4">
+                        <input
+                          type="checkbox"
+                          checked={eConf.active !== false}
+                          onChange={() => handleToggleEmail(eConf.id)}
+                          className="rounded border-border cursor-pointer text-primary w-4 h-4 bg-background outline-none focus:ring-1 focus:ring-primary"
+                        />
+                      </td>
+                      <td className="p-4">
+                        <div className="font-bold text-foreground text-sm">{eConf.email}</div>
+                        <div className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                          {eConf.provider === "Outlook" ? "Microsoft Graph Cloud Sync" : eConf.server}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        {eConf.provider === "Outlook" ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-bold text-blue-400 shadow-sm">
+                            <Globe className="h-3 w-3" /> Outlook
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-400 shadow-sm">
+                            <Mail className="h-3 w-3" /> Gmail / IMAP
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        <select
+                          value={eConf.expected_doc_type || "Invoice"}
+                          onChange={(e) => {
+                            handleFieldChange(eConf.id, "expected_doc_type", e.target.value);
+                            setTimeout(handleBlurSave, 100);
+                          }}
+                          className="h-8 px-2.5 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary w-40 font-medium text-xs shadow-inner"
+                        >
+                          <option value="Invoice">Invoice</option>
+                          <option value="Sales Order">Sales Order</option>
+                          <option value="Purchase Order (PO)">Purchase Order (PO)</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </td>
+                      <td className="p-4">
+                        <input
+                          value={eConf.company_code || ""}
+                          onChange={(e) => handleFieldChange(eConf.id, "company_code", e.target.value)}
+                          onBlur={handleBlurSave}
+                          placeholder="—"
+                          className="w-20 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary font-mono text-center font-bold text-xs shadow-inner"
+                        />
+                      </td>
+                      <td className="p-4">
+                        {emailStatus[eConf.email] === "Pending" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-bold text-amber-400">
+                            <Activity className="h-3 w-3 animate-spin" /> Verifying
+                          </span>
+                        ) : emailStatus[eConf.email] === "Connected" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Active
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> Disconnected
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {eConf.provider !== "Outlook" && (
+                            <button
+                              onClick={() => handleTestEmail(eConf)}
+                              disabled={isTestingEmail[eConf.email]}
+                              className="px-2.5 py-1 text-[10px] font-bold text-primary border border-primary/20 hover:border-primary/50 bg-primary/5 hover:bg-primary/10 rounded-lg transition-all disabled:opacity-50"
+                            >
+                              Test
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteEmail(eConf.id)}
+                            className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-all"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-12 text-center text-muted-foreground">
+              <Mail className="h-10 w-10 mx-auto opacity-30 mb-3 text-primary" />
+              <p className="text-sm font-bold text-foreground">No active email channel sources</p>
+              <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">Click "Add Email Channel" at the top to configure your first Gmail/IMAP server or Outlook Graph API sync.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KeywordsWatchlist() {
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [newKeyword, setNewKeyword] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.email_body_keywords) {
+          setKeywords(data.email_body_keywords);
+        }
+      });
+  }, []);
+
+  const handleSaveKeywords = async (updatedKeywords: string[]) => {
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email_body_keywords: updatedKeywords }),
+      });
+      if (res.ok) {
+        toast.success("Keywords watchlist updated successfully");
+        setKeywords(updatedKeywords);
+      }
+    } catch (err) {
+      toast.error("Failed to save keywords");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleAddKeyword = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!newKeyword.trim()) return;
+    if (keywords.includes(newKeyword.trim())) {
+      toast.info("Keyword already exists");
+      return;
+    }
+    const updated = [...keywords, newKeyword.trim()];
+    handleSaveKeywords(updated);
+    setNewKeyword("");
+  };
+
+  const handleRemoveKeyword = (kw: string) => {
+    const updated = keywords.filter(k => k !== kw);
+    handleSaveKeywords(updated);
   };
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
-        <h2 className="text-2xl font-bold mb-1">Manage Sources</h2>
-        <p className="text-muted-foreground text-sm">Configure email accounts and document intake channels</p>
+        <h2 className="text-2xl font-bold mb-1">Keywords Watchlist</h2>
+        <p className="text-muted-foreground text-sm">Scan raw email text bodies for expected documents if no attachments exist</p>
       </div>
 
-      <div className="space-y-6">
-        {/* Gmail Card */}
-        <div className={cn(
-          "p-6 rounded-xl border transition-all relative overflow-hidden",
-          activeSource === "Gmail" ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-card shadow-sm"
-        )}>
-          <div className="flex items-center gap-3 mb-6">
-            <input 
-              type="radio" 
-              checked={activeSource === "Gmail"} 
-              onChange={() => handleSourceChange("Gmail")}
-              className="w-4 h-4 text-primary"
-            />
-            <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center text-red-600">
-              <Mail className="h-6 w-6" />
-            </div>
-            <div>
-              <h3 className="font-bold text-foreground">Gmail / Workspace</h3>
-              <p className="text-[10px] text-muted-foreground">Sync via standard IMAP</p>
-            </div>
-            {isConnected === true && (
-              <div className="ml-auto flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-success/10 text-[10px] font-bold text-success">
-                <ShieldCheck className="h-3 w-3" /> Connected
-              </div>
-            )}
+      <div className="p-6 rounded-xl border border-border bg-card shadow-sm space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
+            <Tag className="h-6 w-6" />
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pl-8">
-            <div className="space-y-1.5">
-               <label className="text-xs font-bold text-muted-foreground uppercase">Email Address</label>
-               <input
-                 value={email}
-                 onChange={(e) => setEmail(e.target.value)}
-                 className="w-full h-10 px-3 rounded-lg border border-border bg-background text-sm outline-none"
-               />
-            </div>
-            <div className="space-y-1.5">
-               <label className="text-xs font-bold text-muted-foreground uppercase">App Password</label>
-               <input
-                 type="password"
-                 value={password}
-                 onChange={(e) => setPassword(e.target.value)}
-                 className="w-full h-10 px-3 rounded-lg border border-border bg-background text-sm outline-none"
-               />
-            </div>
-            <div className="flex gap-3 md:col-span-2">
-              <button onClick={handleSaveGmail} className="px-4 py-2 bg-primary text-primary-foreground font-bold rounded-lg text-xs flex items-center gap-2">
-                <Save className="h-3 w-3" /> Save Gmail
-              </button>
-              <button onClick={handleTestGmail} disabled={isTesting} className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-muted-foreground hover:bg-muted">
-                {isTesting ? "Testing..." : "Test Connection"}
-              </button>
-            </div>
+          <div>
+            <h3 className="font-bold text-foreground">Email Body Keywords Watchlist</h3>
+            <p className="text-[10px] text-muted-foreground">Define triggering keywords for text body parsing</p>
           </div>
         </div>
 
-        {/* Outlook Card */}
-        <div className={cn(
-          "p-6 rounded-xl border transition-all relative overflow-hidden",
-          activeSource === "Outlook" ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-card shadow-sm"
-        )}>
-           <div className="flex items-center gap-3">
-            <input 
-              type="radio" 
-              checked={activeSource === "Outlook"} 
-              onChange={() => handleSourceChange("Outlook")}
-              className="w-4 h-4 text-primary"
-            />
-            <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600">
-              <Globe className="h-6 w-6" />
-            </div>
-            <div>
-              <h3 className="font-bold text-foreground">Microsoft Outlook Support</h3>
-              <p className="text-[10px] text-muted-foreground">Direct Graph API integration (OAuth 2.0)</p>
-            </div>
-            {outlookConnected && (
-              <div className="ml-auto flex flex-col items-end">
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-success/10 text-[10px] font-bold text-success">
-                  <ShieldCheck className="h-3 w-3" /> Connected
-                </div>
-                <span className="text-[10px] text-muted-foreground mt-1">{outlookUser}</span>
-              </div>
-            )}
-          </div>
+        <div className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Define keywords below. When an incoming email is received and does not contain a PDF attachment, the system will search for these terms in the text body (case-insensitive). If matched, it will run AI extraction on the text body directly.
+          </p>
           
-          <div className="mt-6 pl-8">
-            <button 
-              onClick={handleOutlookConnect}
-              className={cn(
-                "px-6 py-2.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all shadow-sm",
-                outlookConnected 
-                  ? "border border-border text-muted-foreground hover:bg-muted" 
-                  : "bg-[#0078d4] text-white hover:bg-[#005a9e]"
-              )}
+          <form onSubmit={handleAddKeyword} className="flex gap-2 max-w-md">
+            <input
+              value={newKeyword}
+              onChange={(e) => setNewKeyword(e.target.value)}
+              placeholder="e.g. sales order, PO, purchase order, order confirmation"
+              className="flex-1 h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-1 focus:ring-primary font-medium"
+            />
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="px-4 h-9 bg-primary text-primary-foreground rounded-lg text-xs font-bold flex items-center gap-1 hover:shadow-sm disabled:opacity-50"
             >
-              <Globe className="h-4 w-4" />
-              {outlookConnected ? "Reconnect Outlook Account" : "Connect Outlook Account"}
+              <Plus className="h-3.5 w-3.5" /> Add Keyword
             </button>
-            <p className="text-[10px] text-muted-foreground mt-3 font-medium">
-              Uses Microsoft Graph API for secure, token-based access. No password storage required.
-            </p>
+          </form>
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            {keywords.length > 0 ? (
+              keywords.map((kw) => (
+                <span
+                  key={kw}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-xs font-semibold text-primary border border-primary/20 shadow-sm"
+                >
+                  {kw}
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveKeyword(kw)}
+                    className="hover:bg-primary/25 rounded-full p-0.5 transition-all text-primary/75 hover:text-primary"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-muted-foreground italic">No keywords added yet. Add terms above to activate body parsing.</span>
+            )}
           </div>
         </div>
       </div>
@@ -701,12 +1181,79 @@ function ManageCredits() {
 }
 
 function ManageUsers() {
-  const users = [
-    { name: "John Doe", email: "john@mygo.ai", role: "Administrator", status: "Active", lastActive: "2 mins ago" },
-    { name: "Jane Smith", email: "jane.s@company.com", role: "Reviewer", status: "Active", lastActive: "1 hour ago" },
-    { name: "Alex Johnson", email: "alex@support.de", role: "Viewer", status: "Inactive", lastActive: "2 days ago" },
-    { name: "Sarah Williams", email: "sarah.w@tech.io", role: "Reviewer", status: "Active", lastActive: "Online" },
-  ];
+  const [users, setUsers] = useState<any[]>([]);
+  const [isAdding, setIsAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("Viewer");
+
+  const loadUsers = () => {
+    fetch(`${API_BASE}/users`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setUsers(data);
+      });
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  const handleAddUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !email.trim() || !password) {
+      toast.error("Please fill in all fields");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/users`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          email: email.trim(),
+          password,
+          role,
+        }),
+      });
+      if (res.ok) {
+        toast.success("User added successfully");
+        setIsAdding(false);
+        setName("");
+        setEmail("");
+        setPassword("");
+        loadUsers();
+      } else {
+        const data = await res.json();
+        toast.error(data.detail || "Failed to add user");
+      }
+    } catch {
+      toast.error("Failed to connect to user database server");
+    }
+  };
+
+  const handleDeleteUser = async (id: string, emailAddress: string) => {
+    const sessionUser = JSON.parse(localStorage.getItem("user") || '{}');
+    if (sessionUser.email === emailAddress) {
+      toast.error("You cannot delete your own logged-in account!");
+      return;
+    }
+    if (!confirm("Are you sure you want to remove this user account?")) return;
+    try {
+      const res = await fetch(`${API_BASE}/users/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        toast.success("User deleted successfully");
+        loadUsers();
+      } else {
+        toast.error("Failed to delete user");
+      }
+    } catch {
+      toast.error("Failed to connect to user database server");
+    }
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -715,10 +1262,79 @@ function ManageUsers() {
           <h2 className="text-2xl font-bold mb-1">User Management</h2>
           <p className="text-muted-foreground text-sm">Control access, roles, and security for your organization</p>
         </div>
-        <button className="px-4 py-2 bg-primary text-primary-foreground text-xs font-bold rounded-lg flex items-center gap-2 hover:bg-primary/90 transition-colors">
-          <Users className="h-4 w-4" /> Add User
-        </button>
+        {!isAdding && (
+          <button 
+            onClick={() => setIsAdding(true)}
+            className="px-4 py-2 bg-primary text-primary-foreground text-xs font-bold rounded-lg flex items-center gap-2 hover:bg-primary/90 transition-colors shadow-sm"
+          >
+            <Users className="h-4 w-4" /> Add User
+          </button>
+        )}
       </div>
+
+      {isAdding && (
+        <form onSubmit={handleAddUser} className="p-5 border border-border bg-card rounded-xl space-y-4 animate-in slide-in-from-top-2 duration-250 shadow-md">
+          <h4 className="text-[10px] font-bold uppercase tracking-wider text-primary">Register New Corporate User</h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-muted-foreground uppercase">Full Name</label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. John Doe"
+                className="w-full h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-muted-foreground uppercase">Email Address</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="e.g. john@mygo.ai"
+                className="w-full h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-muted-foreground uppercase">Initial Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter password"
+                className="w-full h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-muted-foreground uppercase">Assigned Role</label>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="w-full h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-1 focus:ring-primary font-medium"
+              >
+                <option value="Administrator">Administrator</option>
+                <option value="Reviewer">Reviewer</option>
+                <option value="Viewer">Viewer</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end pt-2 border-t border-border/50">
+            <button
+              type="button"
+              onClick={() => setIsAdding(false)}
+              className="px-3.5 py-1.5 border border-border rounded text-[10px] font-bold text-muted-foreground hover:bg-muted"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-1.5 bg-primary text-primary-foreground rounded text-[10px] font-bold hover:shadow-sm"
+            >
+              Add Corporate User
+            </button>
+          </div>
+        </form>
+      )}
 
       <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-md">
         <table className="w-full text-left border-collapse">
@@ -727,17 +1343,17 @@ function ManageUsers() {
               <th className="px-6 py-5 text-[10px] font-black text-muted-foreground uppercase tracking-widest">User Profile</th>
               <th className="px-6 py-5 text-[10px] font-black text-muted-foreground uppercase tracking-widest">Assigned Role</th>
               <th className="px-6 py-5 text-[10px] font-black text-muted-foreground uppercase tracking-widest">Access Status</th>
-              <th className="px-6 py-5 text-[10px] font-black text-muted-foreground uppercase tracking-widest">Last Activity</th>
+              <th className="px-6 py-5 text-[10px] font-black text-muted-foreground uppercase tracking-widest">Created At</th>
               <th className="px-6 py-5 text-[10px] font-black text-muted-foreground uppercase tracking-widest text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {users.map(u => (
-              <tr key={u.email} className="hover:bg-muted/10 transition-colors group">
+              <tr key={u.id} className="hover:bg-muted/10 transition-colors group">
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-primary/20 to-primary/5 flex items-center justify-center font-black text-primary text-xs">
-                        {u.name[0]}
+                        {u.name ? u.name[0].toUpperCase() : "U"}
                      </div>
                      <div>
                         <div className="font-bold text-sm text-foreground">{u.name}</div>
@@ -753,20 +1369,22 @@ function ManageUsers() {
                 </td>
                 <td className="px-6 py-4">
                   <span className={cn(
-                    "px-2 py-0.5 rounded-full text-[10px] font-black border uppercase",
-                    u.status === "Active" ? "bg-emerald-100 text-emerald-600 border-emerald-200" : "bg-muted text-muted-foreground border-border"
+                    "px-2.5 py-0.5 rounded-full text-[10px] font-black border uppercase shadow-sm",
+                    u.active !== false ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-muted text-muted-foreground border-border"
                   )}>
-                    {u.status}
+                    {u.active !== false ? "Active" : "Inactive"}
                   </span>
                 </td>
-                <td className="px-6 py-4 text-[10px] font-medium text-muted-foreground">
-                  {u.lastActive}
+                <td className="px-6 py-4 text-[10px] font-semibold text-muted-foreground">
+                  {u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}
                 </td>
                 <td className="px-6 py-4 text-right">
-                  <button className="p-2 text-muted-foreground hover:text-primary transition-colors opacity-0 group-hover:opacity-100">
-                    <Smartphone className="h-4 w-4" /> {/* Just a placeholder icon button */}
+                  <button
+                    onClick={() => handleDeleteUser(u.id, u.email)}
+                    className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                  >
+                    <Trash2 className="h-4 w-4" />
                   </button>
-                  <button className="text-xs font-black text-primary hover:underline ml-2">Manage</button>
                 </td>
               </tr>
             ))}
