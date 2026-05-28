@@ -27,4 +27,5 @@ dist-ssr
 backend/InovicePDFs/
 backend/.env
 backend/settings.json
+backend/users.json
 backend/*.log
