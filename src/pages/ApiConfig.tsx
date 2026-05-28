@@ -45,6 +45,13 @@ export default function ApiConfig() {
   const [isTesting, setIsTesting] = useState<number | null>(null);
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({});
 
+  // Live BTP Explorer State
+  const [btpData, setBtpData] = useState<any[]>([]);
+  const [isFetchingBtp, setIsFetchingBtp] = useState(false);
+  const [showRawJson, setShowRawJson] = useState(false);
+  const [activeConfigName, setActiveConfigName] = useState("");
+  const [activeEndpoint, setActiveEndpoint] = useState("");
+
   // Form State
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formName, setFormName] = useState("");
@@ -197,6 +204,32 @@ export default function ApiConfig() {
     }
   };
 
+  const fetchLiveSalesOrders = async () => {
+    setIsFetchingBtp(true);
+    const toastId = toast.loading("Authenticating & querying BTP OData service...", { duration: 10000 });
+    try {
+      const res = await fetch(`${API_BASE}/sap-btp/sales-orders`);
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        toast.success(data.message || "Live Sales Orders retrieved successfully!", { id: toastId });
+        const orders = data.data?.value || data.data || [];
+        setBtpData(Array.isArray(orders) ? orders : []);
+        setActiveConfigName(data.configName);
+        setActiveEndpoint(data.endpoint);
+      } else {
+        toast.error(data.error || "Failed to retrieve BTP data", { id: toastId });
+        if (data.details) {
+          console.error("BTP fetch details:", data.details);
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to reach backend API explorer", { id: toastId });
+    } finally {
+      setIsFetchingBtp(false);
+    }
+  };
+
   const toggleShowSecret = (id: string) => {
     setShowSecret(prev => ({ ...prev, [id]: !prev[id] }));
   };
@@ -334,6 +367,121 @@ export default function ApiConfig() {
             </table>
           )}
         </div>
+      </div>
+
+      {/* Live SAP BTP Explorer Panel */}
+      <div className="fiori-card p-6 mt-6 space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-border pb-4 gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center text-primary">
+                <Activity className="h-4 w-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-primary">
+                    Live SAP BTP OData Explorer
+                  </h3>
+                  {btpData.length > 0 && (
+                    <span className="px-2 py-0.5 text-[10px] font-bold bg-primary/10 text-primary rounded-full border border-primary/20">
+                      {btpData.length} record{btpData.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Verify end-to-end connectivity and view live OData entities retrieved directly from your public SAP BTP Cloud endpoint.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {btpData.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowRawJson(!showRawJson)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-border rounded hover:bg-muted transition-all"
+              >
+                {showRawJson ? "Show Table" : "Show Raw JSON"}
+              </button>
+            )}
+            <button
+              onClick={fetchLiveSalesOrders}
+              disabled={isFetchingBtp}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow-md transition-all disabled:opacity-50 active:scale-95"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isFetchingBtp ? 'animate-spin' : ''}`} />
+              {isFetchingBtp ? "Fetching Cloud..." : "Fetch Live Sales Orders"}
+            </button>
+          </div>
+        </div>
+
+        {/* Configuration Details Panel */}
+        {activeEndpoint && (
+          <div className="bg-muted/30 border border-border rounded p-3 text-[11px] font-mono grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div>
+              <span className="font-bold text-muted-foreground uppercase">Connected Endpoint:</span>{" "}
+              <span className="text-primary truncate block md:inline" title={activeEndpoint}>{activeEndpoint}</span>
+            </div>
+            <div>
+              <span className="font-bold text-muted-foreground uppercase">Active BTP Profile:</span>{" "}
+              <span className="text-foreground">{activeConfigName || "Dynamic OAuth2"}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Live Data Results */}
+        {btpData.length > 0 ? (
+          showRawJson ? (
+            <div className="bg-muted/50 rounded border border-border p-4 max-h-[300px] overflow-y-auto font-mono text-xs">
+              <pre>{JSON.stringify(btpData, null, 2)}</pre>
+            </div>
+          ) : (
+            <div className="overflow-x-auto border border-border rounded">
+              <table className="fiori-smart-table">
+                <thead>
+                  <tr className="bg-muted/20">
+                    <th>Sales Order ID</th>
+                    <th>Order Type</th>
+                    <th>Sales Org</th>
+                    <th>Distribution Chan</th>
+                    <th>Sold-to Party</th>
+                    <th>Date</th>
+                    <th>Created By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {btpData.map((order: any, idx: number) => {
+                    const salesOrderId = order.SalesOrder || order.salesOrderId || order.SalesOrderId || order.Doc_num || `Order_${idx}`;
+                    const orderType = order.SalesOrderType || order.salesOrderType || order.Doc_typ || "OR1";
+                    const salesOrg = order.SalesOrganization || order.salesOrganization || order.Sales_org || "1010";
+                    const distChannel = order.DistributionChannel || order.distributionChannel || order.Distr_chan || "01";
+                    const soldToParty = order.SoldToParty || order.soldToParty || order.Sold_to_party || "BP-CUST";
+                    const createdBy = order.CreatedByUser || order.createdByUser || order.Created_by || "XSUAA";
+                    const rawDate = order.SalesOrderDate || order.CreationDate || order.salesOrderDate || order.creationDate || "";
+                    const dateDisplay = rawDate ? String(rawDate).slice(0, 10) : "—";
+
+                    return (
+                      <tr key={idx} className="hover:bg-muted/10 transition-colors">
+                        <td className="font-bold text-primary text-xs">{salesOrderId}</td>
+                        <td className="text-xs font-semibold">{orderType}</td>
+                        <td className="text-xs font-mono">{salesOrg}</td>
+                        <td className="text-xs font-mono">{distChannel}</td>
+                        <td className="text-xs font-semibold">{soldToParty}</td>
+                        <td className="text-xs font-mono text-muted-foreground">{dateDisplay}</td>
+                        <td className="text-xs text-muted-foreground">{createdBy}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : (
+          <div className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center gap-2 bg-muted/10 rounded border border-dashed border-border/80">
+            <Globe className="h-8 w-8 opacity-25" />
+            <p className="text-xs">No live Sales Orders fetched yet. Press "Fetch Live Sales Orders" to authenticate via XSUAA OAuth and query your SAP BTP service.</p>
+          </div>
+        )}
       </div>
 
       {/* API Form Modal */}

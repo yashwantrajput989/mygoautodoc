@@ -26,6 +26,7 @@ export default function DocumentDetail() {
   const [currentDoc, setCurrentDoc] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [emailsList, setEmailsList] = useState<any[]>([]);
+  const [isPosting, setIsPosting] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
@@ -72,8 +73,29 @@ export default function DocumentDetail() {
     return () => clearInterval(pollInterval);
   }, [id, currentDoc?.is_pending]);
 
-  const handleApprove = () => {
-    toast.success("Document approved and sent to SAP successfully!");
+  const handleApprove = async () => {
+    setIsPosting(true);
+    toast.loading("Posting Sales Order to SAP...", { id: "sap-post" });
+    try {
+      const res = await fetch(`${API_BASE}/documents/${id}/post-sap`, {
+        method: "POST"
+      });
+      const data = await res.json();
+      
+      if (res.ok) {
+        toast.success(data.message || "Sales Order posted to SAP successfully!", { id: "sap-post" });
+        fetchDocDetail();
+      } else {
+        toast.error(data.error || "Failed to post Sales Order to SAP", { id: "sap-post" });
+        if (data.details) {
+          console.error("SAP Error Details:", data.details);
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to connect to backend", { id: "sap-post" });
+    } finally {
+      setIsPosting(false);
+    }
   };
 
   if (isLoading) {
@@ -139,9 +161,11 @@ export default function DocumentDetail() {
           </button>
           <button
             onClick={handleApprove}
-            className="flex items-center gap-2 px-6 py-2 text-sm font-bold bg-primary text-primary-foreground rounded shadow-sm hover:shadow-md transition-all active:scale-[0.98]"
+            disabled={isPosting || isLoading || currentDoc?.is_pending}
+            className="flex items-center gap-2 px-6 py-2 text-sm font-bold bg-primary text-primary-foreground rounded shadow-sm hover:shadow-md transition-all active:scale-[0.98] disabled:opacity-50"
           >
-            <CheckCircle2 className="h-4 w-4" /> Approve & Send to SAP
+            <CheckCircle2 className={`h-4 w-4 ${isPosting ? 'animate-spin' : ''}`} /> 
+            {isPosting ? "Posting to SAP..." : "Approve & Send to SAP"}
           </button>
         </div>
       </header>
@@ -348,7 +372,7 @@ export default function DocumentDetail() {
                   <div className="space-y-4">
                     <h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Header Data</h3>
                     <div className="grid grid-cols-2 gap-4">
-                      <DataField label="Supplier Name" value={currentDoc.data.header?.supplier_name} />
+                      <DataField label="Business Partner" value={currentDoc.data.header?.supplier_name} />
                       <DataField label="Doc Number" value={currentDoc.data.header?.purchase_order_number || currentDoc.data.header?.order_reference} />
                       <DataField label="Posting Date" value={currentDoc.data.header?.invoice_date || currentDoc.data.header?.po_date} />
                       <DataField label="Company" value={currentDoc.data.header?.customer_name} />

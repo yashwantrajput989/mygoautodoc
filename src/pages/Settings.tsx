@@ -23,6 +23,7 @@ import {
   Activity,
   Tag,
   X,
+  Table,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +36,7 @@ const sidebarItems = [
   { id: "sources", label: "Manage Sources", icon: Database },
   { id: "keywords", label: "Keywords Watchlist", icon: Tag },
   { id: "duplicates", label: "Duplicate Detection", icon: ShieldCheck },
+  { id: "mappings", label: "Mapping Table", icon: Table },
   { id: "roles", label: "Manage Roles", icon: Key },
   { id: "credits", label: "Manage AI Credits", icon: Zap },
   { id: "users", label: "User Management", icon: Users },
@@ -73,6 +75,7 @@ export default function SettingsPage() {
           {activeTab === "sources" && <ManageSources />}
           {activeTab === "keywords" && <KeywordsWatchlist />}
           {activeTab === "duplicates" && <DuplicateDetectionSettings />}
+          {activeTab === "mappings" && <BusinessPartnerMappings />}
           {activeTab === "roles" && <ManageRoles />}
           {activeTab === "credits" && <ManageCredits />}
           {activeTab === "users" && <ManageUsers />}
@@ -1412,6 +1415,178 @@ function Download({ className }: { className?: string }) {
       <polyline points="7 10 12 15 17 10" />
       <line x1="12" x2="12" y1="15" y2="3" />
     </svg>
+  );
+}
+
+function BusinessPartnerMappings() {
+  const [mappings, setMappings] = useState<{ email: string; partnerName: string }[]>([]);
+  const [newEmail, setNewEmail] = useState("");
+  const [newPartnerName, setNewPartnerName] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.bp_mappings && Array.isArray(data.bp_mappings)) {
+          setMappings(data.bp_mappings);
+        }
+      })
+      .catch(() => toast.error("Failed to load mappings"))
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  const handleAddMapping = () => {
+    if (!newEmail.trim() || !newPartnerName.trim()) {
+      toast.error("Please provide both email and partner name");
+      return;
+    }
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmail.trim())) {
+      toast.error("Please provide a valid email address");
+      return;
+    }
+
+    // Check for duplicates
+    if (mappings.some(m => m.email.toLowerCase() === newEmail.trim().toLowerCase())) {
+      toast.error("This email address is already mapped");
+      return;
+    }
+
+    setMappings([...mappings, { email: newEmail.trim().toLowerCase(), partnerName: newPartnerName.trim() }]);
+    setNewEmail("");
+    setNewPartnerName("");
+    toast.success("Mapping added to draft list");
+  };
+
+  const handleDeleteMapping = (index: number) => {
+    setMappings(mappings.filter((_, i) => i !== index));
+    toast.success("Mapping removed from draft list");
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/bp-mappings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mappings }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message || "Mappings saved successfully");
+      } else {
+        toast.error(data.error || "Failed to save mappings");
+      }
+    } catch (err) {
+      toast.error("Failed to save mappings");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-foreground">Business Partner Mappings</h2>
+        <p className="text-xs text-muted-foreground mt-1">
+          Map incoming email sender addresses directly to SAP Business Partners. If an email is received from a mapped address, its Business Partner name will automatically be assigned to the mapped value rather than the one extracted by the AI model.
+        </p>
+      </div>
+
+      <div className="fiori-card p-5 space-y-4">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Add New Mapping</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Email ID</label>
+            <input
+              type="email"
+              placeholder="supplier@example.com"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              className="w-full h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Business Partner Name</label>
+            <input
+              type="text"
+              placeholder="e.g. Albyco Belgium"
+              value={newPartnerName}
+              onChange={(e) => setNewPartnerName(e.target.value)}
+              className="w-full h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <button
+            onClick={handleAddMapping}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow-md transition-all active:scale-95"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Mapping
+          </button>
+        </div>
+      </div>
+
+      <div className="fiori-card overflow-hidden">
+        <div className="p-3 border-b border-border bg-card">
+          <span className="text-xs font-bold uppercase tracking-tight">Active Mappings ({mappings.length})</span>
+        </div>
+        <div className="overflow-x-auto">
+          {isLoading ? (
+            <div className="p-8 text-center text-muted-foreground text-xs">Loading mappings...</div>
+          ) : (
+            <table className="fiori-smart-table w-full">
+              <thead>
+                <tr>
+                  <th className="text-left">Email ID</th>
+                  <th className="text-left">Business Partner Name</th>
+                  <th className="w-12 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mappings.map((m, index) => (
+                  <tr key={index} className="hover:bg-muted/10">
+                    <td className="font-mono text-xs font-medium text-foreground">{m.email}</td>
+                    <td className="text-xs font-medium text-primary">{m.partnerName}</td>
+                    <td className="text-center">
+                      <button
+                        onClick={() => handleDeleteMapping(index)}
+                        className="p-1 text-muted-foreground hover:text-destructive rounded hover:bg-destructive/10 transition-colors"
+                        title="Delete Mapping"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {mappings.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="text-center py-8 text-muted-foreground text-xs">
+                      No active mappings defined. Add one above.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-3">
+        <button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow-md transition-all active:scale-95 disabled:opacity-50"
+        >
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving..." : "Save Mappings"}
+        </button>
+      </div>
+    </div>
   );
 }
 

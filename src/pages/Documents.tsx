@@ -13,6 +13,7 @@ import {
   Clock,
   User,
   Paperclip,
+  Trash2,
 } from "lucide-react";
 
 import { API_BASE } from "@/config";
@@ -25,6 +26,8 @@ export default function Documents() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncSource, setSyncSource] = useState<"Gmail" | "Outlook">("Outlook");
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<"newest" | "oldest" | "atoz_supplier" | "atoz_id">("newest");
 
   const fetchDocs = async () => {
     try {
@@ -84,13 +87,86 @@ export default function Documents() {
 
   const toggleAll = () => {
     setSelectedRows((prev) =>
-      prev.length === documents.length ? [] : documents.map((d) => d.id)
+      prev.length === sortedAndFilteredDocs.length ? [] : sortedAndFilteredDocs.map((d) => d.id)
     );
   };
 
   const handleRowClick = (id: string) => {
     navigate(`/documents/${id}`);
   };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm(`Are you sure you want to delete document ${id}?`)) return;
+    
+    try {
+      const res = await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      
+      if (res.ok) {
+        toast.success(data.message || `Document ${id} deleted successfully`);
+        setSelectedRows((prev) => prev.filter((r) => r !== id));
+        fetchDocs();
+      } else {
+        toast.error(data.error || "Failed to delete document");
+      }
+    } catch (err) {
+      toast.error("Failed to delete document");
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!confirm(`Are you sure you want to delete the ${selectedRows.length} selected documents?`)) return;
+    
+    toast.loading(`Deleting ${selectedRows.length} documents...`, { id: "bulk-delete" });
+    try {
+      let successCount = 0;
+      for (const id of selectedRows) {
+        const res = await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
+        if (res.ok) successCount++;
+      }
+      
+      toast.success(`Successfully deleted ${successCount} documents`, { id: "bulk-delete" });
+      setSelectedRows([]);
+      fetchDocs();
+    } catch (err) {
+      toast.error("Bulk delete process failed", { id: "bulk-delete" });
+    }
+  };
+
+  const getDocDate = (doc: any) => {
+    const dateStr = doc.data?.header?.invoice_date || doc.data?.header?.po_date || "";
+    if (!dateStr) return 0;
+    const parsed = Date.parse(dateStr);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  const filteredDocs = documents.filter((doc) => {
+    const query = searchQuery.toLowerCase();
+    const idMatch = doc.id.toLowerCase().includes(query);
+    const supplierMatch = (doc.data?.header?.supplier_name || "").toLowerCase().includes(query);
+    const contextMatch = (doc.data?.header?.context || "").toLowerCase().includes(query);
+    const subjectMatch = (doc.data?.email_metadata?.subject || "").toLowerCase().includes(query);
+    
+    return idMatch || supplierMatch || contextMatch || subjectMatch;
+  });
+
+  const sortedAndFilteredDocs = [...filteredDocs].sort((a, b) => {
+    if (sortBy === "newest") {
+      return getDocDate(b) - getDocDate(a) || b.id.localeCompare(a.id);
+    }
+    if (sortBy === "oldest") {
+      return getDocDate(a) - getDocDate(b) || a.id.localeCompare(b.id);
+    }
+    if (sortBy === "atoz_supplier") {
+      const nameA = a.data?.header?.supplier_name || "";
+      const nameB = b.data?.header?.supplier_name || "";
+      return nameA.localeCompare(nameB) || a.id.localeCompare(b.id);
+    }
+    if (sortBy === "atoz_id") {
+      return a.id.localeCompare(b.id);
+    }
+    return 0;
+  });
 
   return (
     <div className="fiori-page">
@@ -119,10 +195,18 @@ export default function Documents() {
               disabled={isSyncing}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded-r-sm hover:shadow-md transition-all active:scale-95 disabled:opacity-50"
             >
-              <Download className={`h-3.5 w-3.5 ${isSyncing ? 'animate-bounce' : ''}`} /> 
-              {isSyncing ? "Fetching..." : "Fetch Documents"}
+              <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} /> 
+              {isSyncing ? "Refreshing..." : "Refresh"}
             </button>
           </div>
+          {selectedRows.length > 0 && (
+            <button
+              onClick={handleBulkDelete}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-destructive text-destructive-foreground rounded hover:shadow-md transition-all active:scale-95"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete Selected ({selectedRows.length})
+            </button>
+          )}
           <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-card border border-border rounded hover:bg-muted transition-colors">
             <Filter className="h-3.5 w-3.5" /> Filter
           </button>
@@ -131,6 +215,42 @@ export default function Documents() {
 
       {/* Table */}
       <div className="fiori-card overflow-hidden">
+        {/* Toolbar */}
+        <div className="p-3 border-b border-border bg-muted/20 flex flex-col sm:flex-row gap-3 items-center justify-between">
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search by ID, supplier, subject..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-8 pr-8 py-1.5 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Sort By:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="h-[31px] px-2 text-xs border border-border rounded bg-card hover:bg-muted transition-colors focus:outline-none focus:ring-1 focus:ring-primary/20"
+            >
+              <option value="newest">Newest to Oldest</option>
+              <option value="oldest">Oldest to Newest</option>
+              <option value="atoz_supplier">A to Z (Supplier)</option>
+              <option value="atoz_id">A to Z (Doc ID)</option>
+            </select>
+          </div>
+        </div>
+
         <div className="overflow-x-auto">
           {isLoading ? (
             <div className="p-12 text-center text-muted-foreground">Loading documents...</div>
@@ -141,7 +261,7 @@ export default function Documents() {
                   <th className="w-10">
                     <input
                       type="checkbox"
-                      checked={selectedRows.length === documents.length && documents.length > 0}
+                      checked={selectedRows.length === sortedAndFilteredDocs.length && sortedAndFilteredDocs.length > 0}
                       onChange={toggleAll}
                       className="rounded border-border"
                     />
@@ -152,10 +272,11 @@ export default function Documents() {
                   <th>Amount</th>
                   <th>Date</th>
                   <th>Status</th>
+                  <th className="w-12 text-center">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {documents.map((doc) => (
+                {sortedAndFilteredDocs.map((doc) => (
                   <tr
                     key={doc.id}
                     className="group cursor-pointer hover:bg-muted/30 transition-colors"
@@ -189,14 +310,23 @@ export default function Documents() {
                     <td>
                       <StatusBadge status={doc.status} />
                     </td>
+                    <td className="text-center" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => handleDelete(doc.id)}
+                        className="p-1 text-muted-foreground hover:text-destructive rounded hover:bg-destructive/10 transition-colors"
+                        title="Delete Document"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
-                {documents.length === 0 && (
+                {sortedAndFilteredDocs.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="text-center py-12 text-muted-foreground">
+                    <td colSpan={8} className="text-center py-12 text-muted-foreground">
                       <div className="flex flex-col items-center gap-2">
                         <Mail className="h-8 w-8 opacity-20" />
-                        <p>No documents found. Fetch documents to get started.</p>
+                        <p>{documents.length === 0 ? "No documents found. Refresh to get started." : "No documents match your search criteria."}</p>
                       </div>
                     </td>
                   </tr>
@@ -206,7 +336,7 @@ export default function Documents() {
           )}
         </div>
         <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-muted/10">
-          <span className="text-xs text-muted-foreground">Showing {documents.length} documents</span>
+          <span className="text-xs text-muted-foreground">Showing {sortedAndFilteredDocs.length} of {documents.length} documents</span>
           <div className="flex items-center gap-1">
             <button className="px-2.5 py-1 text-xs rounded border border-border hover:bg-muted transition-colors">Previous</button>
             <button className="px-2.5 py-1 text-xs rounded bg-primary text-primary-foreground font-bold">1</button>

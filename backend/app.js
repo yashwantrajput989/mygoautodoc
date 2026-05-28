@@ -30,17 +30,14 @@ if (command === 'server') {
     console.log('Starting Phase 1: Email Ingestion...');
     try {
         const { runPhase1, getSettings } = await import('./server.js');
-        const settings = getSettings();
+        const storageService = (await import('./storageService.js')).default;
+        const settings = await getSettings();
         const isFirstSync = settings.first_sync !== false;
         const result = await runPhase1(settings, isFirstSync);
         console.log(`Phase 1 completed: ${result}`);
         if (isFirstSync) {
             settings.first_sync = false;
-            const { default: fs } = await import('fs');
-            const { default: path } = await import('path');
-            const { fileURLToPath } = await import('url');
-            const __dirname = path.dirname(fileURLToPath(import.meta.url));
-            fs.writeFileSync(path.join(__dirname, 'settings.json'), JSON.stringify(settings, null, 4));
+            await storageService.saveFile('settings', 'settings.json', settings, true);
         }
     } catch (e) {
         console.error(`Phase 1 failed: ${e.message}`);
@@ -60,7 +57,8 @@ if (command === 'server') {
     console.log('Starting Full Sync (Phase 1 + Phase 2)...');
     try {
         const { runPhase1, runPhase2, getSettings } = await import('./server.js');
-        const settings = getSettings();
+        const storageService = (await import('./storageService.js')).default;
+        const settings = await getSettings();
         const isFirstSync = settings.first_sync !== false;
 
         const p1 = await runPhase1(settings, isFirstSync);
@@ -71,11 +69,7 @@ if (command === 'server') {
 
         if (isFirstSync) {
             settings.first_sync = false;
-            const { default: fs } = await import('fs');
-            const { default: path } = await import('path');
-            const { fileURLToPath } = await import('url');
-            const __dirname = path.dirname(fileURLToPath(import.meta.url));
-            fs.writeFileSync(path.join(__dirname, 'settings.json'), JSON.stringify(settings, null, 4));
+            await storageService.saveFile('settings', 'settings.json', settings, true);
         }
     } catch (e) {
         console.error(`Sync failed: ${e.message}`);

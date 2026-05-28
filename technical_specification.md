@@ -396,11 +396,11 @@ backend/
 | Property | Value |
 |---|---|
 | **Provider** | Google DeepMind |
-| **Model ID** | `gemini-3-flash-preview` |
-| **SDK** | `google-genai` Python SDK (≥0.3.0) |
+| **Model ID** | `gemini-3.5-flash` |
+| **SDK** | `@google/genai` Node.js SDK |
 | **API Key Source** | `GEMINI_API_KEY` environment variable |
 | **Response Format** | Structured JSON (`response_mime_type: 'application/json'`) |
-| **Input Type** | Multimodal (text prompt + PDF binary via `types.Part.from_bytes`) |
+| **Input Type** | Multimodal (text prompt + PDF binary via dynamic inlineData base64) |
 
 ### 6.2 Supported AI Providers (Configurable via Settings)
 
@@ -408,7 +408,7 @@ The frontend supports switching between three LLM providers. Currently, only Gem
 
 | Provider | Model | Status |
 |---|---|---|
-| **Google Gemini** | `gemini-3-flash-preview` (configurable) | ✅ Fully implemented |
+| **Google Gemini** | `gemini-3.5-flash` (configurable) | ✅ Fully implemented |
 | **OpenAI** | GPT-4 (configurable) | 🔧 UI ready, backend placeholder |
 | **Anthropic (Claude)** | claude-sonnet-4-6 (configurable) | 🔧 UI ready, backend placeholder |
 
