@@ -130,6 +130,11 @@ export default function DocumentDetail() {
   const matchedEmail = emailsList.find(e => recipientEmail.toLowerCase().includes(e.email.toLowerCase()));
   const isEmailActiveAndConnected = matchedEmail ? (matchedEmail.active !== false) : false;
 
+  const fileExt = currentDoc?.extension?.toLowerCase() || '.pdf';
+  const isImage = ['.png', '.jpg', '.jpeg', '.webp', '.tiff'].includes(fileExt);
+  const isPdf = fileExt === '.pdf';
+  const fileUrl = `${API_BASE}/${currentDoc.is_pending ? 'pending-docs' : 'pdf-docs'}/${currentDoc.filename || `${currentDoc.id}.pdf`}`;
+
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
       {/* Detail Header */}
@@ -227,14 +232,14 @@ export default function DocumentDetail() {
                 </div>
               </div>
             ) : (
-              /* PDF Viewer */
-              <div className="fiori-card flex flex-col overflow-hidden bg-muted/10 min-h-[600px] shadow-sm">
+              /* Multi-format Document Viewer */
+              <div className="fiori-card flex flex-col overflow-hidden bg-muted/10 min-h-[600px] shadow-sm rounded-xl">
                 <div className="p-3 border-b border-border flex items-center justify-between bg-card">
                   <span className="text-xs font-bold flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-primary" /> {currentDoc.is_pending ? "Ingested File (Pending Analysis)" : "Primary Source PDF"}
+                    <FileText className="h-4 w-4 text-primary" /> {currentDoc.is_pending ? "Ingested File (Pending Analysis)" : `Primary Source File (${fileExt.toUpperCase().slice(1)})`}
                   </span>
                   <a
-                    href={`${API_BASE}/${currentDoc.is_pending ? 'pending-docs' : 'pdf-docs'}/${currentDoc.id}.pdf`}
+                    href={fileUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="text-[10px] uppercase font-bold text-primary hover:underline flex items-center gap-1"
@@ -242,13 +247,42 @@ export default function DocumentDetail() {
                     Full View <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
-                <div className="flex-1 bg-slate-200">
-                  <iframe
-                    src={`${API_BASE}/${currentDoc.is_pending ? 'pending-docs' : 'pdf-docs'}/${currentDoc.id}.pdf#toolbar=0`}
-                    className="w-full h-full border-none"
-                    title="PDF Preview"
-                  />
-                </div>
+                {isPdf ? (
+                  <div className="flex-1 bg-slate-200">
+                    <iframe
+                      src={`${fileUrl}#toolbar=0`}
+                      className="w-full h-full border-none"
+                      title="Document Preview"
+                    />
+                  </div>
+                ) : isImage ? (
+                  <div className="flex-1 bg-slate-100 flex items-center justify-center p-4 overflow-auto min-h-[500px]">
+                    <img
+                      src={fileUrl}
+                      className="max-w-full max-h-[550px] object-contain rounded-lg shadow-md border border-border bg-white"
+                      alt="Document Preview"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex-1 bg-muted/30 flex flex-col items-center justify-center p-8 text-center space-y-4 min-h-[500px]">
+                    <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                      <FileText className="h-8 w-8 text-primary" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-foreground truncate max-w-sm">{currentDoc.filename || `${currentDoc.id}${fileExt}`}</h3>
+                      <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
+                        This is a Microsoft Office document ({fileExt.toUpperCase().slice(1)}). Direct browser previewing is disabled for security.
+                      </p>
+                    </div>
+                    <a
+                      href={fileUrl}
+                      download
+                      className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground rounded-lg font-bold shadow hover:bg-primary/95 transition-all text-xs"
+                    >
+                      <Download className="h-4 w-4" /> Download and Open Locally
+                    </a>
+                  </div>
+                )}
               </div>
             )}
 

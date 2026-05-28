@@ -34,14 +34,31 @@ app.get('/api/pdf-docs/:filename', async (req, res) => {
     try {
         const { filename } = req.params;
         const result = await storageService.getStreamOrPath('sap_docs', filename);
-        res.setHeader('Content-Type', 'application/pdf');
+        const ext = path.extname(filename).toLowerCase();
+        const mimeTypes = {
+            '.pdf': 'application/pdf',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.webp': 'image/webp',
+            '.tiff': 'image/tiff',
+            '.txt': 'text/plain',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xls': 'application/vnd.ms-excel',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.ppt': 'application/vnd.ms-powerpoint',
+            '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        };
+        const contentType = mimeTypes[ext] || 'application/octet-stream';
+        res.setHeader('Content-Type', contentType);
         if (result.type === 'path') {
             res.sendFile(result.value);
         } else {
             result.value.pipe(res);
         }
     } catch (err) {
-        res.status(404).send('PDF not found');
+        res.status(404).send('File not found');
     }
 });
 
@@ -49,14 +66,31 @@ app.get('/api/pending-docs/:filename', async (req, res) => {
     try {
         const { filename } = req.params;
         const result = await storageService.getStreamOrPath('downloads', filename);
-        res.setHeader('Content-Type', 'application/pdf');
+        const ext = path.extname(filename).toLowerCase();
+        const mimeTypes = {
+            '.pdf': 'application/pdf',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.webp': 'image/webp',
+            '.tiff': 'image/tiff',
+            '.txt': 'text/plain',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xls': 'application/vnd.ms-excel',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.ppt': 'application/vnd.ms-powerpoint',
+            '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        };
+        const contentType = mimeTypes[ext] || 'application/octet-stream';
+        res.setHeader('Content-Type', contentType);
         if (result.type === 'path') {
             res.sendFile(result.value);
         } else {
             result.value.pipe(res);
         }
     } catch (err) {
-        res.status(404).send('PDF not found');
+        res.status(404).send('File not found');
     }
 });
 
@@ -630,6 +664,7 @@ app.get('/api/auth/callback', async (req, res) => {
 
 app.get('/api/documents', async (req, res) => {
     const docs = [];
+    const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
 
     // 1. From Ready for SAP (Analyzed)
     try {
@@ -637,12 +672,24 @@ app.get('/api/documents', async (req, res) => {
         for (const f of sapJsonFiles) {
             try {
                 const data = await storageService.readFile('sap_json', f, true);
+                const docId = path.parse(f).name;
+                
+                let ext = '.pdf';
+                for (const e of supportedExts) {
+                    if (await storageService.existsFile('sap_docs', `${docId}${e}`)) {
+                        ext = e;
+                        break;
+                    }
+                }
+
                 docs.push({
-                    id: path.parse(f).name,
+                    id: docId,
                     data,
                     status: 'success',
                     is_legit: true,
                     is_pending: false,
+                    extension: ext,
+                    filename: `${docId}${ext}`
                 });
             } catch { /* skip */ }
         }
@@ -650,9 +697,15 @@ app.get('/api/documents', async (req, res) => {
 
     // 2. From Ingested but not yet Analyzed (Pending)
     try {
-        const pendingPdfs = await storageService.listFiles('downloads', '.pdf');
-        for (const f of pendingPdfs) {
+        const allFiles = await storageService.listFiles('downloads', '');
+        const pendingFiles = allFiles.filter(f => {
+            const ext = path.extname(f).toLowerCase();
+            return supportedExts.includes(ext);
+        });
+
+        for (const f of pendingFiles) {
             const docId = path.parse(f).name;
+            const ext = path.extname(f).toLowerCase();
             if (docs.some((d) => d.id === docId)) continue;
 
             let emailMeta = {};
@@ -673,6 +726,8 @@ app.get('/api/documents', async (req, res) => {
                 status: 'pending',
                 is_legit: false,
                 is_pending: true,
+                extension: ext,
+                filename: `${docId}${ext}`
             });
         }
     } catch { /* ignore */ }
@@ -686,9 +741,12 @@ app.delete('/api/documents/:id', async (req, res) => {
         const { id } = req.params;
         console.log(`🗑️ [API] Request to delete document: ${id}`);
         
-        await storageService.deleteFile('downloads', `${id}.pdf`);
-        await storageService.deleteFile('sap_docs', `${id}.pdf`);
-        await storageService.deleteFile('archive_junk', `${id}.pdf`);
+        const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
+        for (const ext of supportedExts) {
+            await storageService.deleteFile('downloads', `${id}${ext}`);
+            await storageService.deleteFile('sap_docs', `${id}${ext}`);
+            await storageService.deleteFile('archive_junk', `${id}${ext}`);
+        }
         await storageService.deleteFile('sap_json', `${id}.json`);
         await storageService.deleteFile('metadata', `${id}.json`);
         
@@ -1349,10 +1407,13 @@ async function runGmailSync(settings, isFirstSync) {
                     const bodyContent = parsed.text || '';
                     const allAttachments = (parsed.attachments || []).map((a) => a.filename).filter(Boolean);
 
-                    // Process PDF attachments
+                    // Process all supported attachments (PDF, Images, Office Docs, Plain Text)
                     let pdfFound = false;
+                    const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
                     for (const att of parsed.attachments || []) {
-                        if (att.contentType !== 'application/pdf' || !att.filename) continue;
+                        if (!att.filename) continue;
+                        const ext = path.extname(att.filename).toLowerCase();
+                        if (!supportedExts.includes(ext)) continue;
                         pdfFound = true;
 
                         const uniqueFilename = `${seqno}_${att.filename}`;
@@ -1516,9 +1577,11 @@ async function runOutlookSync(isFirstSync) {
                     const attachments = attData.value || [];
                     const allAttachmentNames = attachments.map((a) => a.name).filter(Boolean);
 
+                    const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
                     for (const att of attachments) {
                         if (att['@odata.type'] !== '#microsoft.graph.fileAttachment') continue;
-                        if (!att.name?.toLowerCase().endsWith('.pdf')) continue;
+                        const ext = path.extname(att.name || '').toLowerCase();
+                        if (!supportedExts.includes(ext)) continue;
                         pdfFound = true;
 
                         const safeId = msgId.slice(-12);
@@ -1652,12 +1715,17 @@ async function runPhase2() {
 
     let processedCount = 0;
     
-    let pdfs = [];
+    let pendingDocs = [];
     try {
-        pdfs = await storageService.listFiles('downloads', '.pdf');
+        const allFiles = await storageService.listFiles('downloads', '');
+        const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
+        pendingDocs = allFiles.filter(f => {
+            const ext = path.extname(f).toLowerCase();
+            return supportedExts.includes(ext);
+        });
     } catch { /* ignore */ }
 
-    for (const fname of pdfs) {
+    for (const fname of pendingDocs) {
         const baseName = path.parse(fname).name;
         const metaFilename = baseName + '.json';
 
@@ -1671,9 +1739,9 @@ async function runPhase2() {
             while (attempts < maxAttempts) {
                 try {
                     if (!await storageService.existsFile('downloads', fname)) break;
-                    const pdfData = await storageService.readFile('downloads', fname);
+                    const fileData = await storageService.readFile('downloads', fname);
                     
-                    if (!pdfData.length && !fname.startsWith('body_')) break;
+                    if (!fileData.length && !fname.startsWith('body_')) break;
 
                     let isBodyOnly = false;
                     let emailMeta = {};
@@ -1698,15 +1766,54 @@ async function runPhase2() {
                             config: { responseMimeType: 'application/json' },
                         });
                     } else {
-                        const base64Pdf = pdfData.toString('base64');
-                        response = await client.models.generateContent({
-                            model: modelId,
-                            contents: [
-                                customPrompt,
-                                { inlineData: { mimeType: 'application/pdf', data: base64Pdf } },
-                            ],
-                            config: { responseMimeType: 'application/json' },
-                        });
+                        const ext = path.extname(fname).toLowerCase();
+                        const supportedImages = ['.png', '.jpg', '.jpeg', '.webp', '.tiff'];
+                        
+                        if (ext === '.pdf') {
+                            const base64Data = fileData.toString('base64');
+                            response = await client.models.generateContent({
+                                model: modelId,
+                                contents: [
+                                    customPrompt,
+                                    { inlineData: { mimeType: 'application/pdf', data: base64Data } },
+                                ],
+                                config: { responseMimeType: 'application/json' },
+                            });
+                        } else if (supportedImages.includes(ext)) {
+                            const base64Data = fileData.toString('base64');
+                            const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.slice(1)}`;
+                            response = await client.models.generateContent({
+                                model: modelId,
+                                contents: [
+                                    customPrompt,
+                                    { inlineData: { mimeType, data: base64Data } },
+                                ],
+                                config: { responseMimeType: 'application/json' },
+                            });
+                        } else if (ext === '.txt') {
+                            const textContent = fileData.toString('utf-8');
+                            const fullContent = `Analyze this text file content for SAP S/4HANA integration. Document name: ${fname}\n\nFile Content:\n${textContent}`;
+                            response = await client.models.generateContent({
+                                model: modelId,
+                                contents: [
+                                    customPrompt,
+                                    fullContent
+                                ],
+                                config: { responseMimeType: 'application/json' },
+                            });
+                        } else {
+                            // Office Documents (.docx, .doc, .xlsx, .xls, .pptx, .ppt)
+                            // Treat safely by using email body, metadata and filename to perform contextual parse!
+                            const docDescription = `Analyze this document for SAP S/4HANA integration. The document is a Microsoft Office file: "${fname}". Since it is a binary office file, perform a contextual analysis based on the email details:\n\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nCompany Code: ${emailMeta.company_code || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}`;
+                            response = await client.models.generateContent({
+                                model: modelId,
+                                contents: [
+                                    customPrompt,
+                                    docDescription
+                                ],
+                                config: { responseMimeType: 'application/json' },
+                            });
+                        }
                     }
 
                     if (!response.text) throw new Error('Empty AI response');
