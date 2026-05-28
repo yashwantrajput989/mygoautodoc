@@ -936,24 +936,28 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
             const btpDate = formatBTPDate(poDate);
             const reqDeliveryDate = formatBTPDate(docData.header?.requested_delivery_date || poDate);
 
-            // HARDCODED line items — exact materials from the verified working demo payload.
-            // ARFL100AM and GMB515BAM are confirmed valid for Sales Org 1010, Dist Chan 01.
-            const lineItems = [
-                {
+            // Map line items dynamically from docData.line_items, using extractMaterial helper.
+            // Switches from the hardcoded list to dynamic mapping using MaterialEntered to bypass standard master data constraints.
+            const lineItems = (docData.line_items || []).map((item, index) => {
+                const material = extractMaterial(item.material_description, index === 0 ? "ARFL100AM" : "GMB515BAM");
+                return {
+                    SalesOrderItem: String((index + 1) * 10),
+                    MaterialEntered: material,
+                    RequestedQuantity: String(Math.round(parseFloat(item.quantity) || 1)),
+                    RequestedQuantityUnit: "EA",
+                    ProductionPlant: "1010"
+                };
+            });
+
+            if (lineItems.length === 0) {
+                lineItems.push({
                     SalesOrderItem: "10",
-                    Material: "ARFL100AM",
-                    RequestedQuantity: "2",
+                    MaterialEntered: "ARFL100AM",
+                    RequestedQuantity: "1",
                     RequestedQuantityUnit: "EA",
                     ProductionPlant: "1010"
-                },
-                {
-                    SalesOrderItem: "20",
-                    Material: "GMB515BAM",
-                    RequestedQuantity: "2",
-                    RequestedQuantityUnit: "EA",
-                    ProductionPlant: "1010"
-                }
-            ];
+                });
+            }
 
             const payload = {
                 SalesOrderType: "OR1",
