@@ -117,7 +117,7 @@ const OUTLOOK_REDIRECT_URI = process.env.OUTLOOK_REDIRECT_URI || 'http://localho
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:8080';
 
 const AUTHORITY = `https://login.microsoftonline.com/${OUTLOOK_TENANT_ID}`;
-const SCOPE = ['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft.com/User.Read'];
+const SCOPE = ['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft.com/User.Read', 'offline_access'];
 
 const PROMPT_ANALYSIS = `
 Analyze this document with extreme precision for SAP S/4HANA integration.
@@ -1506,12 +1506,93 @@ async function getOutlookToken(tokens) {
     }
     if (!tokens) return null;
 
+    // Check if token is still valid (using a 60-second buffer)
     if (Date.now() / 1000 < (tokens.expires_at || 0) - 60) {
         return tokens.access_token;
     }
 
-    console.log('--- [OUTLOOK] Token may be expired, using existing ---');
-    return tokens.access_token;
+    if (!tokens.refresh_token) {
+        console.log('--- [OUTLOOK] Token expired and no refresh token found. Re-login required. ---');
+        return tokens.access_token;
+    }
+
+    console.log(`🔑 [OUTLOOK] Access token expired. Attempting token refresh using refresh token for ${tokens.user_principal_name || 'Outlook account'}...`);
+    try {
+        const tenantId = process.env.OUTLOOK_TENANT_ID || 'common';
+        const clientId = process.env.OUTLOOK_CLIENT_ID;
+        const clientSecret = process.env.OUTLOOK_CLIENT_SECRET;
+
+        if (!clientId || !clientSecret) {
+            console.error('❌ [OUTLOOK] Cannot refresh token: OUTLOOK_CLIENT_ID or OUTLOOK_CLIENT_SECRET is missing from .env');
+            return tokens.access_token;
+        }
+
+        const response = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                grant_type: 'refresh_token',
+                refresh_token: tokens.refresh_token,
+                scope: 'https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read offline_access'
+            })
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Token refresh request failed with status ${response.status}: ${errText}`);
+        }
+
+        const data = await response.json();
+        if (!data.access_token) {
+            throw new Error('No access_token returned in refresh response');
+        }
+
+        const newTokens = {
+            access_token: data.access_token,
+            refresh_token: data.refresh_token || tokens.refresh_token,
+            expires_at: (Date.now() / 1000) + (data.expires_in || 3600),
+            user_principal_name: tokens.user_principal_name
+        };
+
+        // Update settings dynamically to persist new tokens
+        const settings = await getSettings();
+        let updated = false;
+
+        // 1. Update root settings outlook_tokens if active
+        if (settings.outlook_tokens && settings.outlook_tokens.user_principal_name?.toLowerCase() === tokens.user_principal_name?.toLowerCase()) {
+            settings.outlook_tokens = newTokens;
+            updated = true;
+        }
+
+        // 2. Update accounts list inside settings.emails
+        if (settings.emails && Array.isArray(settings.emails)) {
+            settings.emails = settings.emails.map(e => {
+                if (e.provider === 'Outlook' && e.email?.toLowerCase() === tokens.user_principal_name?.toLowerCase()) {
+                    updated = true;
+                    return {
+                        ...e,
+                        outlook_tokens: newTokens
+                    };
+                }
+                return e;
+            });
+        }
+
+        if (updated) {
+            await saveSettings(settings);
+            console.log(`💾 [OUTLOOK] Persisted refreshed tokens successfully for ${tokens.user_principal_name}.`);
+        }
+
+        // Update the reference so calling code has the new one immediately
+        Object.assign(tokens, newTokens);
+
+        return newTokens.access_token;
+    } catch (err) {
+        console.error(`❌ [OUTLOOK] Failed to refresh Outlook access token: ${err.message}`);
+        return tokens.access_token;
+    }
 }
 
 // ─── PHASE 1 — OUTLOOK GRAPH API INGESTION ───────────────────────
