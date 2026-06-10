@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   Menu,
   LogOut,
+  Shield,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,11 @@ export function AppShell({ children }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   const user = JSON.parse(localStorage.getItem("user") || '{"name":"Admin User","role":"Administrator"}');
+
+  const visibleNavItems = [
+    ...navItems,
+    ...(user.role === "Administrator" ? [{ title: "Admin Portal", path: "/admin", icon: Shield }] : [])
+  ];
 
   const handleLogout = () => {
     if (confirm("Are you sure you want to log out?")) {
@@ -100,7 +106,7 @@ export function AppShell({ children }: AppShellProps) {
         >
           <div className="flex-1 py-4 flex flex-col">
             <div className="flex-1">
-              {navItems.map((item) => {
+              {visibleNavItems.map((item) => {
                 const isActive = location.pathname.startsWith(item.path) && (item.path !== "/" || location.pathname === "/");
                 return (
                   <Link

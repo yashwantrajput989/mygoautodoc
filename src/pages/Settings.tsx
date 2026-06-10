@@ -92,6 +92,11 @@ function AIPreferences() {
     anthropic: "",
     gemini: "",
   });
+  const [models, setModels] = useState({
+    openai: "gpt-4o",
+    anthropic: "claude-3-5-sonnet-latest",
+    gemini: "gemini-2.5-flash",
+  });
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
 
@@ -100,18 +105,33 @@ function AIPreferences() {
       .then((res) => res.json())
       .then((data) => {
         if (data.active_provider) setActiveProvider(data.active_provider);
+        setKeys({
+          openai: data.openai_api_key || "",
+          anthropic: data.anthropic_api_key || "",
+          gemini: data.gemini_api_key || "",
+        });
+        setModels({
+          openai: data.openai_model || "gpt-4o",
+          anthropic: data.anthropic_model || "claude-3-5-sonnet-latest",
+          gemini: data.gemini_model || "gemini-2.5-flash",
+        });
+      })
+      .catch(() => {
+        toast.error("Failed to load settings data");
       });
   }, []);
 
   const handleSave = async (provider: string) => {
     setIsSaving(true);
+    const stateKey = provider === "Claude" ? "anthropic" : provider.toLowerCase();
     try {
       const res = await fetch(`${API_BASE}/settings/ai`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider,
-          api_key: keys[provider.toLowerCase() as keyof typeof keys],
+          api_key: keys[stateKey as keyof typeof keys],
+          model: models[stateKey as keyof typeof models],
         }),
       });
       if (res.ok) {
@@ -165,66 +185,125 @@ function AIPreferences() {
         </h3>
 
         <div className="space-y-4">
-          {providers.map((p) => (
-            <div
-              key={p.id}
-              className={cn(
-                "p-6 rounded-xl border transition-all relative overflow-hidden",
-                activeProvider === p.id
-                  ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                  : "border-border bg-card hover:bg-muted/30"
-              )}
-            >
-              <div className="flex items-start gap-4 mb-4">
-                <div className="mt-1">
-                  <input
-                    type="radio"
-                    checked={activeProvider === p.id}
-                    onChange={() => setActiveProvider(p.id)}
-                    className="w-4 h-4 text-primary focus:ring-primary border-border"
-                  />
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className={cn("w-3 h-3 rounded-full", p.color)} />
-                      <span className="font-bold text-foreground">{p.label || p.id}</span>
-                      {p.id === "OpenAI" && <span className="text-[10px] text-muted-foreground px-1 border rounded ml-1">Default</span>}
+          {providers.map((p) => {
+            const hasKey = !!keys[p.keyName as keyof typeof keys];
+            return (
+              <div
+                key={p.id}
+                className={cn(
+                  "p-6 rounded-xl border transition-all relative overflow-hidden",
+                  activeProvider === p.id
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                    : "border-border bg-card hover:bg-muted/30"
+                )}
+              >
+                <div className="flex items-start gap-4 mb-4">
+                  <div className="mt-1">
+                    <input
+                      type="radio"
+                      checked={activeProvider === p.id}
+                      onChange={() => setActiveProvider(p.id)}
+                      className="w-4 h-4 text-primary focus:ring-primary border-border"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className={cn("w-3 h-3 rounded-full", p.color)} />
+                        <span className="font-bold text-foreground">{p.label || p.id}</span>
+                        {p.id === "OpenAI" && <span className="text-[10px] text-muted-foreground px-1 border rounded ml-1">Default</span>}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs">
+                        {hasKey ? (
+                          <span className="text-emerald-500 font-semibold flex items-center gap-1">
+                            <CheckCircle2 className="h-3.5 w-3.5" /> Key set
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground flex items-center gap-1">
+                            <Lock className="h-3 w-3" /> No key set
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Lock className="h-3 w-3" /> No key set
+                    <p className="text-xs text-muted-foreground mt-0.5">{p.description}</p>
+                  </div>
+                </div>
+
+                <div className="relative ml-8">
+                  <input
+                    type={visibility[p.id] ? "text" : "password"}
+                    value={keys[p.keyName as keyof typeof keys]}
+                    onChange={(e) => setKeys({ ...keys, [p.keyName]: e.target.value })}
+                    placeholder={`Enter ${p.label || p.id} API key`}
+                    className="w-full bg-background/50 border border-border h-11 px-4 pr-24 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                    <button
+                      onClick={() => toggleVisibility(p.id)}
+                      className="p-2 text-muted-foreground hover:text-foreground hover:bg-background/80 rounded-md transition-colors"
+                    >
+                      {visibility[p.id] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                    <button
+                      onClick={() => handleSave(p.id)}
+                      disabled={isSaving || !keys[p.keyName as keyof typeof keys]}
+                      className="px-3 py-1.5 bg-primary text-primary-foreground text-xs font-bold rounded-md hover:bg-primary/90 disabled:opacity-50 transition-all flex items-center gap-1.5"
+                    >
+                      <Save className="h-3 w-3" /> Save Key
+                    </button>
+                  </div>
+                </div>
+
+                {hasKey && (
+                  <div className="mt-4 ml-8 p-4 bg-muted/20 border border-border/50 rounded-lg space-y-2.5 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <label className="text-xs font-bold text-muted-foreground uppercase block">
+                      Select Model
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={models[p.keyName as keyof typeof models] || ""}
+                        onChange={(e) => setModels({ ...models, [p.keyName]: e.target.value })}
+                        className="bg-background border border-border h-9 px-3 rounded-md text-xs focus:ring-1 focus:ring-primary outline-none transition-all w-64 text-foreground font-medium"
+                      >
+                        {p.id === "OpenAI" && (
+                          <>
+                            <option value="gpt-4o">gpt-4o (Recommended)</option>
+                            <option value="gpt-4o-mini">gpt-4o-mini</option>
+                            <option value="gpt-4-turbo">gpt-4-turbo</option>
+                            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+                          </>
+                        )}
+                        {p.id === "Claude" && (
+                          <>
+                            <option value="claude-3-5-sonnet-latest">claude-3-5-sonnet-latest (Recommended)</option>
+                            <option value="claude-3-5-haiku-latest">claude-3-5-haiku-latest</option>
+                            <option value="claude-3-opus-latest">claude-3-opus-latest</option>
+                          </>
+                        )}
+                        {p.id === "Gemini" && (
+                          <>
+                            <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended)</option>
+                            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                            <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                          </>
+                        )}
+                      </select>
+                      <button
+                        onClick={() => handleSave(p.id)}
+                        disabled={isSaving}
+                        className="px-3.5 py-2 bg-primary text-primary-foreground text-xs font-bold rounded-md hover:bg-primary/90 disabled:opacity-50 transition-all flex items-center gap-1.5 h-9"
+                      >
+                        <Save className="h-3.5 w-3.5" /> Save Model
+                      </button>
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">{p.description}</p>
-                </div>
+                )}
               </div>
-
-              <div className="relative ml-8">
-                <input
-                  type={visibility[p.id] ? "text" : "password"}
-                  value={keys[p.keyName as keyof typeof keys]}
-                  onChange={(e) => setKeys({ ...keys, [p.keyName]: e.target.value })}
-                  placeholder={`Enter ${p.label || p.id} API key`}
-                  className="w-full bg-background/50 border border-border h-11 px-4 pr-24 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
-                />
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                  <button
-                    onClick={() => toggleVisibility(p.id)}
-                    className="p-2 text-muted-foreground hover:text-foreground hover:bg-background/80 rounded-md transition-colors"
-                  >
-                    {visibility[p.id] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                  <button
-                    onClick={() => handleSave(p.id)}
-                    disabled={isSaving || !keys[p.keyName as keyof typeof keys]}
-                    className="px-3 py-1.5 bg-primary text-primary-foreground text-xs font-bold rounded-md hover:bg-primary/90 disabled:opacity-50 transition-all flex items-center gap-1.5"
-                  >
-                    <Save className="h-3 w-3" /> Save
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -320,7 +399,7 @@ function ManageSources() {
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newServer, setNewServer] = useState("imap.gmail.com");
-  const [newDocType, setNewDocType] = useState("Invoice");
+  const [newDocType, setNewDocType] = useState("Vendor Invoice");
   const [newCompanyCode, setNewCompanyCode] = useState("");
   
   // Testing connection state map: email -> boolean
@@ -340,7 +419,7 @@ function ManageSources() {
             email: data.user_email,
             password: data.app_password || "",
             server: data.imap_server || "imap.gmail.com",
-            expected_doc_type: "Invoice",
+            expected_doc_type: "Vendor Invoice",
             company_code: "",
             active: true,
             provider: "Gmail"
@@ -355,7 +434,7 @@ function ManageSources() {
         // Handle Outlook authentication callback success redirect
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('outlook') === 'success' && data.outlook_tokens) {
-          const pendingType = sessionStorage.getItem('pending_outlook_doctype') || 'Invoice';
+          const pendingType = sessionStorage.getItem('pending_outlook_doctype') || 'Vendor Invoice';
           const pendingCC = sessionStorage.getItem('pending_outlook_cc') || '';
           
           const newOutlookEmail = {
@@ -490,7 +569,7 @@ function ManageSources() {
     setNewEmail("");
     setNewPassword("");
     setNewServer("imap.gmail.com");
-    setNewDocType("Invoice");
+    setNewDocType("Vendor Invoice");
     setNewCompanyCode("");
     setIsAdding(false);
     setAddStep(1);
@@ -610,10 +689,8 @@ function ManageSources() {
                       onChange={(e) => setNewDocType(e.target.value)}
                       className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-medium"
                     >
-                      <option value="Invoice">Invoice</option>
+                      <option value="Vendor Invoice">Vendor Invoice</option>
                       <option value="Sales Order">Sales Order</option>
-                      <option value="Purchase Order (PO)">Purchase Order (PO)</option>
-                      <option value="Other">Other</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
@@ -794,10 +871,8 @@ function ManageSources() {
                           }}
                           className="h-8 px-2.5 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary w-40 font-medium text-xs shadow-inner"
                         >
-                          <option value="Invoice">Invoice</option>
+                          <option value="Vendor Invoice">Vendor Invoice</option>
                           <option value="Sales Order">Sales Order</option>
-                          <option value="Purchase Order (PO)">Purchase Order (PO)</option>
-                          <option value="Other">Other</option>
                         </select>
                       </td>
                       <td className="p-4">

@@ -122,32 +122,111 @@ const SCOPE = ['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft
 const PROMPT_ANALYSIS = `
 Analyze this document with extreme precision for SAP S/4HANA integration.
 
+First, determine the document context. It must be either "Sales Order" or "Vendor Invoice".
+
 1. DATA CLEANING RULES:
    - DATES: Convert all dates to 'YYYY-MM-DD' format.
-   - AMOUNTS: Return as clean strings with exactly two decimal places (e.g., "1250.00"). REMOVE $, commas, or spaces.
-   - CURRENCY: Use standard 3-letter ISO codes (e.g., USD, CAD).
-   - EMPTY FIELDS: Use null or "" rather than "N/A".
+   - AMOUNTS/PRICES: Return as clean strings with exactly two decimal places (e.g., "1250.00"). REMOVE $, commas, or spaces.
+   - CURRENCY: Use standard 3-letter ISO codes (e.g., USD, CAD, EUR, INR).
+   - EMPTY FIELDS: Use null or "" rather than "N/A" or "None".
 
-2. LOGIC:
-   - Set "is_legit_invoice" to true if it is a financial document.
-   - Set "total_pages_detected".
+2. EXTRACTION RULES:
+   If the document is a "Sales Order", extract these fields:
+   - HEADER:
+     * context: "Sales Order"
+     * sold_to_party_number: Customer's account number / Sold-to Party number in SAP.
+     * customer_name: Name of the customer.
+     * ship_to_party_number: Ship-to Party number / Delivery address ID.
+     * requested_date: Requested delivery date.
+     * order_received_date: Date the order was received or placed.
+     * payment_terms: Payment terms (e.g. Net 30, COD).
+     * inco_terms: Incoterms (e.g. FOB, EXW).
+     * customer_po_number: Customer's Purchase Order number.
+   - ITEM (under "line_items" array):
+     * item_number: Item/pos number (e.g., "10", "20", "30").
+     * customer_material_number: Customer's SKU/material code.
+     * material_description: Name/description of the product.
+     * sap_material_number: SAP material SKU/code (e.g., ARFL100AM, GMB515BAM) if mentioned.
+     * quantity: Order quantity.
+     * unit_of_measure: Unit (e.g. EA, PC).
+     * price: Unit price.
+     * amount: Total item amount (quantity * price).
+     * tax: Tax amount for this line.
+   - FOOTER:
+     * total_amount: Grand total amount.
+     * total_taxes: Sum of all taxes.
+   - EXCEPTIONS (under "exceptions" key):
+     * exceptions: Describe any anomalies, missing mandatory data, price discrepancies, or warning messages.
 
-3. EXTRACTION:
-   - HEADER: context, purchase_order_number, order_reference, customer_name, customer_address, supplier_name, supplier_address, po_date, invoice_date, requested_delivery_date.
-   - LINE_ITEMS: material_description, quantity, unit_price, line_amount, line_tax, net_amount.
-   - TOTALS: total_amount, total_discount, total_tax, gross_payable_amount, currency, tax_description.
-
-*** IMPORTANT: For 'tax_description', look for text like 'Hst', 'Gst', 'Sales Tax', 'Exempt', or 'Zero Rated'. If not found, use 'Standard'. ***
+   If the document is a "Vendor Invoice", extract these fields:
+   - HEADER:
+     * context: "Vendor Invoice"
+     * supplier_number: Supplier's account number / Vendor ID.
+     * supplier_name: Name of the vendor/supplier.
+     * invoice_date: Date of the invoice.
+     * invoice_reference: Invoice number / reference.
+     * po_number: Purchase order number associated with this invoice.
+     * po_type: Either "PO" or "Non-PO".
+   - ITEM (under "line_items" array):
+     * item_number: Item/pos number.
+     * supplier_material_number: Vendor's SKU/material code.
+     * material_description: Name/description of the product.
+     * sap_material_number: SAP material SKU/code if mentioned.
+     * quantity: Invoiced quantity.
+     * unit_of_measure: Unit (e.g. EA, PC).
+     * price: Unit price.
+     * amount: Total item amount.
+     * tax: Tax amount for this line.
+   - FOOTER:
+     * total_amount: Grand total amount.
+     * total_taxes: Sum of all taxes.
+   - EXCEPTIONS (under "exceptions" key):
+     * exceptions: Describe any issues like tax mismatch, PO mismatch, etc.
 
 Return a JSON object structured exactly like this:
 {
   "is_legit_invoice": boolean,
   "total_pages_detected": integer,
-  "header": { "field_name": "value" },
-  "line_items": [ { "field_name": "value" } ],
-  "totals": { "field_name": "value" }
+  "header": {
+    "context": "Sales Order" | "Vendor Invoice",
+    "sold_to_party_number": string or null,
+    "customer_name": string or null,
+    "ship_to_party_number": string or null,
+    "requested_date": string or null,
+    "order_received_date": string or null,
+    "payment_terms": string or null,
+    "inco_terms": string or null,
+    "customer_po_number": string or null,
+    "supplier_number": string or null,
+    "supplier_name": string or null,
+    "invoice_date": string or null,
+    "invoice_reference": string or null,
+    "po_number": string or null,
+    "po_type": "PO" | "Non-PO" | null
+  },
+  "line_items": [
+    {
+      "item_number": string or null,
+      "customer_material_number": string or null,
+      "supplier_material_number": string or null,
+      "material_description": string or null,
+      "sap_material_number": string or null,
+      "quantity": string or null,
+      "unit_of_measure": string or null,
+      "price": string or null,
+      "amount": string or null,
+      "tax": string or null
+    }
+  ],
+  "totals": {
+    "total_amount": string or null,
+    "total_taxes": string or null,
+    "currency": string or null
+  },
+  "exceptions": string or null
 }
 `;
+
 
 // ─── USER DATABASE & AUTHENTICATION ──────────────────────────────
 
@@ -163,9 +242,10 @@ async function getUsers() {
             id: 'admin-' + Date.now(),
             name: 'Admin User',
             email: 'admin@mygo.ai',
-            password: crypto.createHash('sha256').update('admin123').digest('hex'),
+            password: crypto.createHash('sha256').update('mygo1234').digest('hex'),
             role: 'Administrator',
             active: true,
+            approved: true,
             created_at: new Date().toISOString()
         }
     ];
@@ -194,14 +274,15 @@ app.post('/api/auth/signup', async (req, res) => {
         email: email.toLowerCase(),
         password: crypto.createHash('sha256').update(password).digest('hex'),
         role: role || 'Viewer',
-        active: true,
+        active: false,
+        approved: false,
         created_at: new Date().toISOString()
     };
     users.push(newUser);
     await saveUsers(users);
     
     const { password: _, ...userWithoutPassword } = newUser;
-    res.json({ message: 'User created successfully', user: userWithoutPassword });
+    res.json({ message: 'Account registered successfully. Please await administrator approval before signing in.', user: userWithoutPassword });
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -217,6 +298,9 @@ app.post('/api/auth/login', async (req, res) => {
     const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
     if (user.password !== hashedPassword) {
         return res.status(401).json({ detail: 'Invalid email or password' });
+    }
+    if (user.approved === false) {
+        return res.status(403).json({ detail: 'Your account is pending administrator approval.' });
     }
     if (user.active === false) {
         return res.status(403).json({ detail: 'Account is deactivated' });
@@ -248,11 +332,31 @@ app.post('/api/users', async (req, res) => {
         password: crypto.createHash('sha256').update(password).digest('hex'),
         role: role || 'Viewer',
         active: true,
+        approved: true,
         created_at: new Date().toISOString()
     };
     users.push(newUser);
     await saveUsers(users);
     res.json({ message: 'User added successfully' });
+});
+
+app.put('/api/users/:id', async (req, res) => {
+    const { id } = req.params;
+    const { name, email, role, active, approved } = req.body;
+    let users = await getUsers();
+    const idx = users.findIndex(u => u.id === id);
+    if (idx === -1) {
+        return res.status(404).json({ detail: 'User not found' });
+    }
+    
+    if (name !== undefined) users[idx].name = name;
+    if (email !== undefined) users[idx].email = email.toLowerCase();
+    if (role !== undefined) users[idx].role = role;
+    if (active !== undefined) users[idx].active = active;
+    if (approved !== undefined) users[idx].approved = approved;
+    
+    await saveUsers(users);
+    res.json({ message: 'User updated successfully', user: users[idx] });
 });
 
 app.delete('/api/users/:id', async (req, res) => {
@@ -322,9 +426,18 @@ app.post('/api/settings/email', async (req, res) => {
 app.post('/api/settings/ai', async (req, res) => {
     const { provider, api_key, model } = req.body;
     const current = await getSettings();
-    current[`${provider.toLowerCase()}_api_key`] = api_key;
+    
+    let providerKey = provider.toLowerCase();
+    if (providerKey === 'claude') providerKey = 'anthropic';
+    
+    const keyName = `${providerKey}_api_key`;
+    if (api_key !== undefined && api_key !== '********') {
+        current[keyName] = api_key;
+    }
     current.active_provider = provider;
-    if (model) current[`${provider.toLowerCase()}_model`] = model;
+    if (model) {
+        current[`${providerKey}_model`] = model;
+    }
     await saveSettings(current);
     res.json({ message: `${provider} settings updated successfully` });
 });
@@ -353,6 +466,18 @@ app.post('/api/settings/bp-mappings', async (req, res) => {
         res.json({ success: true, message: 'Business Partner mapping table updated successfully' });
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/settings/mappings', async (req, res) => {
+    try {
+        const { mappings } = req.body;
+        const current = await getSettings();
+        current.field_mappings = mappings;
+        await saveSettings(current);
+        res.json({ success: true, message: 'Schema mappings saved successfully', field_mappings: current.field_mappings });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -674,6 +799,11 @@ app.get('/api/documents', async (req, res) => {
                 const data = await storageService.readFile('sap_json', f, true);
                 const docId = path.parse(f).name;
                 
+                if (!data.human_readable_id) {
+                    data.human_readable_id = getHumanReadableId(docId);
+                    storageService.saveFile('sap_json', f, data, true).catch(() => {});
+                }
+                
                 let ext = '.pdf';
                 for (const e of supportedExts) {
                     if (await storageService.existsFile('sap_docs', `${docId}${e}`)) {
@@ -685,7 +815,7 @@ app.get('/api/documents', async (req, res) => {
                 docs.push({
                     id: docId,
                     data,
-                    status: 'success',
+                    status: data.status || 'ready_to_send',
                     is_legit: true,
                     is_pending: false,
                     extension: ext,
@@ -719,11 +849,12 @@ app.get('/api/documents', async (req, res) => {
             docs.push({
                 id: docId,
                 data: {
+                    human_readable_id: getHumanReadableId(docId),
                     email_metadata: emailMeta,
                     header: { context: Object.keys(emailMeta).length ? 'Ingested' : 'Local File', supplier_name: 'AI Analyzing...' },
                     totals: { currency: '', total_amount: 'Pending' },
                 },
-                status: 'pending',
+                status: 'in_progress',
                 is_legit: false,
                 is_pending: true,
                 extension: ext,
@@ -739,20 +870,284 @@ app.get('/api/documents', async (req, res) => {
 app.delete('/api/documents/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        console.log(`🗑️ [API] Request to delete document: ${id}`);
+        const isForce = req.query.force === 'true';
         
-        const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
-        for (const ext of supportedExts) {
-            await storageService.deleteFile('downloads', `${id}${ext}`);
-            await storageService.deleteFile('sap_docs', `${id}${ext}`);
-            await storageService.deleteFile('archive_junk', `${id}${ext}`);
+        if (isForce) {
+            console.log(`🧹 [API] Permanently deleting document: ${id}`);
+            const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
+            for (const ext of supportedExts) {
+                await storageService.deleteFile('trash_docs', `${id}${ext}`);
+            }
+            await storageService.deleteFile('trash_json', `${id}.json`);
+            return res.json({ success: true, message: `Document ${id} permanently deleted` });
         }
-        await storageService.deleteFile('sap_json', `${id}.json`);
-        await storageService.deleteFile('metadata', `${id}.json`);
         
-        res.json({ success: true, message: `Document ${id} successfully deleted` });
+        console.log(`🗑️ [API] Soft deleting document: ${id}`);
+        let docData = {};
+        let ext = '.pdf';
+        const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
+        
+        if (await storageService.existsFile('sap_json', `${id}.json`)) {
+            docData = await storageService.readFile('sap_json', `${id}.json`, true);
+            for (const e of supportedExts) {
+                if (await storageService.existsFile('sap_docs', `${id}${e}`)) {
+                    ext = e;
+                    await storageService.moveFile('sap_docs', 'trash_docs', `${id}${e}`);
+                    break;
+                }
+            }
+            await storageService.deleteFile('sap_json', `${id}.json`);
+        } else {
+            for (const e of supportedExts) {
+                if (await storageService.existsFile('downloads', `${id}${e}`)) {
+                    ext = e;
+                    await storageService.moveFile('downloads', 'trash_docs', `${id}${e}`);
+                    break;
+                }
+            }
+            
+            let emailMeta = {};
+            if (await storageService.existsFile('metadata', `${id}.json`)) {
+                try {
+                    emailMeta = await storageService.readFile('metadata', `${id}.json`, true);
+                } catch {}
+                await storageService.deleteFile('metadata', `${id}.json`);
+            }
+            
+            docData = {
+                human_readable_id: getHumanReadableId(id),
+                email_metadata: emailMeta,
+                header: { context: Object.keys(emailMeta).length ? 'Ingested' : 'Local File', supplier_name: 'AI Ingested (Deleted)' },
+                totals: { currency: '', total_amount: 'Pending' },
+                status: 'in_progress'
+            };
+        }
+        
+        docData.deleted_at = new Date().toISOString();
+        docData.original_status = docData.status || 'ready_to_send';
+        docData.status = 'deleted';
+        docData.original_ext = ext;
+        
+        await storageService.saveFile('trash_json', `${id}.json`, docData, true);
+        res.json({ success: true, message: `Document ${id} successfully moved to Recycle Bin` });
     } catch (e) {
         console.error(`Error deleting document:`, e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/documents/deleted', async (req, res) => {
+    try {
+        await cleanupOldTrash();
+        const docs = [];
+        const trashFiles = await storageService.listFiles('trash_json', '.json');
+        for (const f of trashFiles) {
+            try {
+                const data = await storageService.readFile('trash_json', f, true);
+                const docId = path.parse(f).name;
+                docs.push({
+                    id: docId,
+                    data,
+                    status: 'deleted',
+                    is_deleted: true,
+                    deleted_at: data.deleted_at,
+                    filename: `${docId}${data.original_ext || '.pdf'}`
+                });
+            } catch {}
+        }
+        docs.sort((a, b) => new Date(b.deleted_at).getTime() - new Date(a.deleted_at).getTime());
+        res.json(docs);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/documents/:id/restore', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!(await storageService.existsFile('trash_json', `${id}.json`))) {
+            return res.status(404).json({ error: 'Document not found in Recycle Bin' });
+        }
+        
+        const data = await storageService.readFile('trash_json', `${id}.json`, true);
+        const originalStatus = data.original_status || 'ready_to_send';
+        const ext = data.original_ext || '.pdf';
+        
+        data.status = originalStatus;
+        delete data.deleted_at;
+        delete data.original_status;
+        delete data.original_ext;
+        
+        if (originalStatus === 'in_progress') {
+            await storageService.moveFile('trash_docs', 'downloads', `${id}${ext}`);
+            if (data.email_metadata && Object.keys(data.email_metadata).length > 0) {
+                await storageService.saveFile('metadata', `${id}.json`, data.email_metadata, true);
+            }
+        } else {
+            await storageService.moveFile('trash_docs', 'sap_docs', `${id}${ext}`);
+            await storageService.saveFile('sap_json', `${id}.json`, data, true);
+        }
+        
+        await storageService.deleteFile('trash_json', `${id}.json`);
+        res.json({ success: true, message: `Document ${id} successfully restored` });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/duplicates', async (req, res) => {
+    try {
+        await cleanupOldTrash();
+        const docs = [];
+        const sapJsonFiles = await storageService.listFiles('sap_json', '.json');
+        for (const f of sapJsonFiles) {
+            try {
+                const data = await storageService.readFile('sap_json', f, true);
+                const docId = path.parse(f).name;
+                if (data.status !== 'deleted' && !data.override_duplicate) {
+                    docs.push({ id: docId, data, status: data.status || 'ready_to_send' });
+                }
+            } catch {}
+        }
+
+        const settings = await getSettings();
+        const keywords = settings.email_body_keywords || [];
+        const duplicates = [];
+        
+        const getDocIdentifiers = (h) => {
+            if (!h) return [];
+            const ids = [
+                h.invoice_reference,
+                h.purchase_order_number,
+                h.po_number,
+                h.customer_po_number,
+                h.order_reference
+            ];
+            return ids.map(id => String(id || '').trim()).filter(id => id !== '');
+        };
+
+        for (let i = 0; i < docs.length; i++) {
+            const doc = docs[i];
+            const data = doc.data;
+            
+            const ids1 = getDocIdentifiers(data.header);
+            const supplier1 = data.header?.supplier_name || data.header?.customer_name || 'Unknown';
+            const date1 = data.header?.invoice_date || data.header?.po_date || data.header?.order_received_date || '';
+            const amount1 = data.totals?.total_amount || '';
+            const currency1 = data.totals?.currency || 'USD';
+            
+            for (let j = 0; j < docs.length; j++) {
+                if (i === j) continue;
+                const otherDoc = docs[j];
+                const otherData = otherDoc.data;
+                
+                const ids2 = getDocIdentifiers(otherData.header);
+                const supplier2 = otherData.header?.supplier_name || otherData.header?.customer_name || 'Unknown';
+                const date2 = otherData.header?.invoice_date || otherData.header?.po_date || otherData.header?.order_received_date || '';
+                const amount2 = otherData.totals?.total_amount || '';
+                const currency2 = otherData.totals?.currency || 'USD';
+                
+                const hasIdOverlap = ids1.length > 0 && ids2.length > 0 && ids1.some(id => ids2.includes(id));
+                const isSupplierMatch = supplier1 !== 'Unknown' && supplier2 !== 'Unknown' && 
+                    supplier1.toLowerCase().trim() === supplier2.toLowerCase().trim();
+                const isDateMatch = date1 !== '' && date2 !== '' && date1 === date2;
+                const isAmountMatch = amount1 !== '' && amount2 !== '' && parseFloat(amount1) === parseFloat(amount2);
+                
+                let isDuplicate = false;
+                let matchConfidence = 50;
+                
+                if (hasIdOverlap) {
+                    isDuplicate = true;
+                    matchConfidence = 80;
+                    if (isSupplierMatch) matchConfidence += 10;
+                    if (isAmountMatch) matchConfidence += 5;
+                    if (isDateMatch) matchConfidence += 5;
+                } else if (isSupplierMatch && isDateMatch && isAmountMatch) {
+                    isDuplicate = true;
+                    matchConfidence = 75;
+                }
+                
+                if (isDuplicate) {
+                    const matchedKeyword = keywords.find(kw => {
+                        const s1 = `${data.body || ''} ${data.subject || ''} ${data.email_metadata?.body || ''} ${data.email_metadata?.subject || ''}`.toLowerCase();
+                        const s2 = `${otherData.body || ''} ${otherData.subject || ''} ${otherData.email_metadata?.body || ''} ${otherData.email_metadata?.subject || ''}`.toLowerCase();
+                        return s1.includes(kw.toLowerCase()) || s2.includes(kw.toLowerCase());
+                    });
+                    
+                    const hasKeyword = !!matchedKeyword;
+                    if (hasKeyword) {
+                        matchConfidence = Math.min(100, matchConfidence + 10);
+                    }
+                    
+                    const hrId = data.human_readable_id || getHumanReadableId(doc.id);
+                    const otherHrId = otherData.human_readable_id || getHumanReadableId(otherDoc.id);
+                    
+                    duplicates.push({
+                        id: doc.id,
+                        human_readable_id: hrId,
+                        supplier: supplier1,
+                        invoiceNo: ids1[0] || 'N/A',
+                        date: date1,
+                        amount: `${currency1} ${amount1}`,
+                        matchConfidence,
+                        matchingDoc: otherHrId,
+                        matchingDocRealId: otherDoc.id,
+                        suggested: matchConfidence >= 85 ? 'Confirm Duplicate' : 'Review',
+                        hasKeyword,
+                        matchedKeyword: matchedKeyword || null,
+                        matchingDocDetails: {
+                            supplier: supplier2,
+                            invoiceNo: ids2[0] || 'N/A',
+                            date: date2,
+                            amount: `${currency2} ${amount2}`
+                        }
+                    });
+                    break;
+                }
+            }
+        }
+        res.json(duplicates);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/documents/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        console.log(`📝 [API] Request to update document: ${id}`);
+        
+        let docData = {};
+        try {
+            if (await storageService.existsFile('sap_json', `${id}.json`)) {
+                docData = await storageService.readFile('sap_json', `${id}.json`, true);
+            }
+        } catch (err) {
+            console.warn(`Could not read existing sap_json file for ${id}, creating new one.`);
+        }
+        
+        docData.header = { ...(docData.header || {}), ...(req.body.header || {}) };
+        docData.totals = { ...(docData.totals || {}), ...(req.body.totals || {}) };
+        if (req.body.line_items) {
+            docData.line_items = req.body.line_items;
+        }
+        if (req.body.exceptions !== undefined) {
+            docData.exceptions = req.body.exceptions;
+        }
+        if (req.body.status !== undefined) {
+            docData.status = req.body.status;
+        }
+        if (req.body.override_duplicate !== undefined) {
+            docData.override_duplicate = req.body.override_duplicate;
+        }
+        
+        if (!docData.human_readable_id) {
+            docData.human_readable_id = getHumanReadableId(id);
+        }
+        await storageService.saveFile('sap_json', `${id}.json`, docData, true);
+        res.json({ success: true, message: `Document ${id} successfully updated`, data: docData });
+    } catch (e) {
+        console.error(`Error updating document:`, e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -867,12 +1262,169 @@ app.get('/api/sap-btp/sales-orders', async (req, res) => {
     }
 });
 
-app.post('/api/documents/:id/post-sap', async (req, res) => {
+function getHumanReadableId(docId) {
+    if (!docId) return 'DOC-00000';
+    let hash = 0;
+    for (let i = 0; i < docId.length; i++) {
+        hash = (hash << 5) - hash + docId.charCodeAt(i);
+        hash |= 0;
+    }
+    const numericId = Math.abs(hash) % 100000;
+    return `DOC-${String(numericId).padStart(5, '0')}`;
+}
+
+function buildSAPPayload(docData, settings) {
+    const apiConfigs = settings.api_configs || [];
+    const btpConfig = apiConfigs.find(c => 
+        c.status === 'Active' && 
+        (c.auth_type === 'OAuth2' || c.name?.toLowerCase().includes('btp') || c.name?.toLowerCase().includes('sales order') || c.endpoint?.includes('/odata/v4/sales-order'))
+    );
+    const SAP_BTP_ENABLED = (process.env.SAP_BTP_ENABLED === "true") || !!btpConfig;
+
+    const formatSAPDate = (dateStr) => {
+        if (!dateStr) return new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        return dateStr.replace(/-/g, '');
+    };
+
+    const extractMaterial = (desc, fallback) => {
+        if (!desc) return fallback;
+        const match = desc.match(/[A-Z0-9]{5,18}/);
+        return match ? match[0] : fallback;
+    };
+
+    const poDate = docData.header?.order_received_date || docData.header?.requested_date || docData.header?.invoice_date || docData.header?.po_date || "";
+    const poNum = docData.header?.customer_po_number || docData.header?.po_number || docData.header?.purchase_order_number || docData.header?.order_reference || "AUTO_PO";
+    const currency = docData.totals?.currency || "USD";
+    const partnerName = docData.header?.supplier_name || "BP-CUST"; 
+    const paymentTerms = docData.header?.payment_terms || "0001";
+    const incoTerms = docData.header?.inco_terms || "FOB";
+    const soldToParty = String(docData.header?.sold_to_party_number || docData.header?.supplier_number || partnerName || "BP-CUST").trim();
+    const shipToParty = String(docData.header?.ship_to_party_number || soldToParty).trim();
+
+    if (SAP_BTP_ENABLED) {
+        const formatBTPDate = (dateStr) => {
+            if (!dateStr) return new Date().toISOString().slice(0, 10);
+            const match = dateStr.match(/^(\d{4})[-/]?(\d{2})[-/]?(\d{2})/);
+            if (match) {
+                return `${match[1]}-${match[2]}-${match[3]}`;
+            }
+            return dateStr;
+        };
+
+        const btpDate = formatBTPDate(poDate);
+        const reqDeliveryDate = formatBTPDate(docData.header?.requested_date || docData.header?.requested_delivery_date || poDate);
+
+        // Map line items to BTP structure
+        const lineItems = (docData.line_items || []).map((item, index) => {
+            const itemNum = item.item_number || String((index + 1) * 10);
+            const qty = String(Math.round(parseFloat(item.quantity) || 1));
+            const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
+            const material = extractMaterial(item.material_description, defaultMat);
+            const uom = item.unit_of_measure || "EA";
+
+            return {
+                SalesOrderItem: itemNum,
+                Material: material,
+                RequestedQuantity: qty,
+                RequestedQuantityUnit: uom,
+                ProductionPlant: "1010"
+            };
+        });
+
+        if (lineItems.length === 0) {
+            lineItems.push({
+                SalesOrderItem: "10",
+                Material: "ARFL100AM",
+                RequestedQuantity: "2",
+                RequestedQuantityUnit: "EA",
+                ProductionPlant: "1010"
+            });
+        }
+
+        let btpSoldTo = soldToParty;
+        if (btpSoldTo.length > 10) {
+            btpSoldTo = "BP-CUST";
+        }
+
+        return {
+            SalesOrderType: "OR1",
+            SalesOrganization: "1010",
+            DistributionChannel: "01",
+            OrganizationDivision: "01",
+            SoldToParty: btpSoldTo,
+            PurchaseOrderByCustomer: poNum,
+            SalesOrderDate: btpDate,
+            RequestedDeliveryDate: reqDeliveryDate,
+            TransactionCurrency: currency === "USD" ? "USD" : currency,
+            PricingDate: btpDate,
+            ShippingCondition: "01",
+            IncotermsClassification: incoTerms.length > 3 ? incoTerms.substring(0, 3).toUpperCase() : incoTerms.toUpperCase(),
+            IncotermsTransferLocation: "Destination",
+            IncotermsLocation1: "Destination",
+            CustomerPaymentTerms: paymentTerms === "0001" ? "0003" : paymentTerms,
+            CustomerAccountAssignmentGroup: "01",
+            BillingDocumentDate: reqDeliveryDate,
+            to_Item: lineItems
+        };
+    } else {
+        // Local Direct Fallback Payload
+        const lineItems = (docData.line_items || []).map((item, index) => {
+            const itemNum = item.item_number || String((index + 1) * 10);
+            const qty = String(Math.round(parseFloat(item.quantity) || 1));
+            const price = String(Math.round(parseFloat(item.price || item.unit_price) || 0));
+            const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
+            const material = extractMaterial(item.material_description, defaultMat);
+            const uom = item.unit_of_measure || "EA";
+
+            return {
+                Doc_typ: "OR1",
+                Item_num: itemNum,
+                Material1: material,
+                Quantity: qty,
+                Uom: uom,
+                Deliv_date: formatSAPDate(docData.header?.requested_date || docData.header?.requested_delivery_date || poDate),
+                Price: price
+            };
+        });
+
+        if (lineItems.length === 0) {
+            lineItems.push({
+                Doc_typ: "OR1",
+                Item_num: "10",
+                Material1: "ARFL100AM",
+                Quantity: "1",
+                Uom: "EA",
+                Deliv_date: formatSAPDate(poDate),
+                Price: "100"
+            });
+        }
+
+        return {
+            Doc_typ: "OR1",
+            Sales_org: "1010",
+            Distr_chan: "01",
+            Division: "01",
+            Sold_to_party: soldToParty.length > 10 ? "BP-CUST" : soldToParty,
+            Ship_to_party: shipToParty.length > 10 ? "BP-CUST" : shipToParty,
+            Bill_to_party: soldToParty.length > 10 ? "BP-CUST" : soldToParty,
+            Req_deli_date: formatSAPDate(docData.header?.requested_date || docData.header?.requested_delivery_date || poDate),
+            Cust_po_num: poNum,
+            Cust_po_date: formatSAPDate(poDate),
+            Deliv_block: "01",
+            Bill_block: "02",
+            Pay_terms: paymentTerms,
+            Inco_term1: incoTerms.length > 3 ? incoTerms.substring(0, 3).toUpperCase() : incoTerms.toUpperCase(),
+            Inco_term2: "HYD",
+            Currency: currency === "USD" ? "INR" : currency,
+            Test: "",
+            Navi_Sales_Mat: lineItems
+        };
+    }
+}
+
+app.get('/api/documents/:id/sap-payload', async (req, res) => {
     try {
         const { id } = req.params;
-        console.log(`🚀 [SAP] Ingested request to post Sales Order to SAP for document: ${id}`);
-
-        // 1. Fetch analyzed document json
         let docData;
         try {
             docData = await storageService.readFile('sap_json', `${id}.json`, true);
@@ -884,20 +1436,31 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
             return res.status(404).json({ error: `Analyzed document data not found for ${id}` });
         }
 
-        // Helper to format date YYYY-MM-DD to YYYYMMDD
-        const formatSAPDate = (dateStr) => {
-            if (!dateStr) return new Date().toISOString().slice(0, 10).replace(/-/g, '');
-            return dateStr.replace(/-/g, '');
-        };
+        const settings = await getSettings();
+        const payload = buildSAPPayload(docData, settings);
+        res.json(payload);
+    } catch (err) {
+        console.error("❌ [API] Payload build error:", err.message);
+        res.status(500).json({ error: "Failed to generate SAP payload", details: err.message });
+    }
+});
 
-        // Helper to extract SAP material code from description or use fallback
-        const extractMaterial = (desc, fallback) => {
-            if (!desc) return fallback;
-            const match = desc.match(/[A-Z0-9]{5,18}/);
-            return match ? match[0] : fallback;
-        };
+app.post('/api/documents/:id/post-sap', async (req, res) => {
+    try {
+        const { id } = req.params;
+        console.log(`🚀 [SAP] Ingested request to post Sales Order to SAP for document: ${id}`);
 
-        // 2. Check if SAP BTP Cloud Ingestion is enabled dynamically or in env
+        let docData;
+        try {
+            docData = await storageService.readFile('sap_json', `${id}.json`, true);
+        } catch (err) {
+            return res.status(404).json({ error: `Analyzed document data not found for ${id}` });
+        }
+
+        if (!docData) {
+            return res.status(404).json({ error: `Analyzed document data not found for ${id}` });
+        }
+
         const settings = await getSettings();
         const apiConfigs = settings.api_configs || [];
         const btpConfig = apiConfigs.find(c => 
@@ -906,6 +1469,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
         );
 
         const SAP_BTP_ENABLED = (process.env.SAP_BTP_ENABLED === "true") || !!btpConfig;
+        const payload = buildSAPPayload(docData, settings);
 
         if (SAP_BTP_ENABLED) {
             console.log(`☁️ [BTP] BTP Cloud Routing active. Initiating OAuth 2.0 token exchange...`);
@@ -968,71 +1532,43 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
 
             console.log(`🎟️ [BTP] OAuth Access Token successfully retrieved.`);
 
-            // Helper to format date as YYYY-MM-DD for OData v4
-            const formatBTPDate = (dateStr) => {
-                if (!dateStr) return new Date().toISOString().slice(0, 10);
-                const match = dateStr.match(/^(\d{4})[-/]?(\d{2})[-/]?(\d{2})/);
-                if (match) {
-                    return `${match[1]}-${match[2]}-${match[3]}`;
+            // Pre-post Duplicate Check: query SAP DB for this PO number
+            const poNum = payload.PurchaseOrderByCustomer;
+            if (poNum && poNum !== "AUTO_PO") {
+                const checkUrl = `${baseUrl.replace(/\/$/, '')}/odata/v4/sales-order/SalesOrders?$filter=PurchaseOrderByCustomer eq '${encodeURIComponent(poNum)}'`;
+                console.log(`🔍 [BTP] Pre-check: Querying SAP DB for duplicates: ${checkUrl}`);
+                try {
+                    const checkResp = await fetch(checkUrl, {
+                        method: 'GET',
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Accept': 'application/json'
+                        }
+                    });
+                    if (checkResp.ok) {
+                        const checkData = await checkResp.json();
+                        const existingOrders = checkData.value || [];
+                        if (existingOrders.length > 0) {
+                            const existingOrder = existingOrders[0];
+                            console.warn(`⚠️ [BTP] Duplicate check matched: Customer PO ${poNum} already exists in SAP as Sales Order ${existingOrder.SalesOrder}`);
+                            
+                            // Save locally as success since it is already in SAP
+                            docData.status = 'success';
+                            docData.sap_document_number = existingOrder.SalesOrder;
+                            docData.sap_payload = payload;
+                            await storageService.saveFile('sap_json', `${id}.json`, docData, true);
+
+                            return res.status(409).json({
+                                error: 'DUPLICATE_SAP_DOCUMENT',
+                                message: `Document with PO Number "${poNum}" already exists in SAP as Sales Order ${existingOrder.SalesOrder}. Duplicate push prevented.`,
+                                sap_document_number: existingOrder.SalesOrder
+                            });
+                        }
+                    }
+                } catch (checkErr) {
+                    console.error("⚠️ [BTP] Pre-posting duplicate check failed:", checkErr.message);
                 }
-                return dateStr;
-            };
-
-            // Prepare OData v4 Payload
-            const poDate = docData.header?.po_date || docData.header?.invoice_date || "";
-            const poNum = docData.header?.purchase_order_number || docData.header?.order_reference || "AUTO_PO";
-            const currency = docData.totals?.currency || "USD";
-            const partnerName = docData.header?.supplier_name || "BP-CUST"; // Mapped/overridden partner name
-
-            // SAP OData Schema constraints: SoldToParty must be a customer ID/code (MaxLength 10)
-            let soldToParty = String(partnerName).trim();
-            if (soldToParty.length > 10) {
-                console.log(`⚠️ [BTP] SoldToParty "${soldToParty}" exceeds MaxLength of 10. Falling back to default "BP-CUST".`);
-                soldToParty = "BP-CUST";
             }
-
-            const btpDate = formatBTPDate(poDate);
-            const reqDeliveryDate = formatBTPDate(docData.header?.requested_delivery_date || poDate);
-
-            // HARDCODED line items — exact materials from the verified working demo payload.
-            // ARFL100AM and GMB515BAM are confirmed valid for Sales Org 1010, Dist Chan 01.
-            const lineItems = [
-                {
-                    SalesOrderItem: "10",
-                    Material: "ARFL100AM",
-                    RequestedQuantity: "2",
-                    RequestedQuantityUnit: "EA",
-                    ProductionPlant: "1010"
-                },
-                {
-                    SalesOrderItem: "20",
-                    Material: "GMB515BAM",
-                    RequestedQuantity: "2",
-                    RequestedQuantityUnit: "EA",
-                    ProductionPlant: "1010"
-                }
-            ];
-
-            const payload = {
-                SalesOrderType: "OR1",
-                SalesOrganization: "1010",
-                DistributionChannel: "01",
-                OrganizationDivision: "01",
-                SoldToParty: soldToParty,
-                PurchaseOrderByCustomer: poNum,
-                SalesOrderDate: btpDate,
-                RequestedDeliveryDate: reqDeliveryDate,
-                TransactionCurrency: currency === "USD" ? "USD" : currency,
-                PricingDate: btpDate,
-                ShippingCondition: "01",
-                IncotermsClassification: "EXW",
-                IncotermsTransferLocation: "Destination",
-                IncotermsLocation1: "Destination",
-                CustomerPaymentTerms: "0003",
-                CustomerAccountAssignmentGroup: "01",
-                BillingDocumentDate: reqDeliveryDate,
-                to_Item: lineItems
-            };
 
             const postUrl = `${baseUrl.replace(/\/$/, '')}/odata/v4/sales-order/SalesOrders`;
             console.log(`🚀 [BTP] Posting Sales Order to BTP Cloud API at: ${postUrl}`);
@@ -1051,7 +1587,25 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
 
             if (btpPostResp.ok) {
                 console.log(`🎉 [BTP] Success! Sales Order processed successfully in Cloud BTP.`);
-                return res.json({ success: true, message: 'Sales Order posted to SAP BTP successfully!', data: btpText });
+                
+                let sapDocNumber = '';
+                try {
+                    const respObj = JSON.parse(btpText);
+                    sapDocNumber = respObj?.SalesOrder || respObj?.d?.Sales_order_id || respObj?.Sales_order_id || '';
+                } catch {
+                    const match = btpText.match(/"(?:SalesOrder|Sales_order_id)"\s*:\s*"([^"]+)"/i);
+                    if (match) sapDocNumber = match[1];
+                }
+                if (!sapDocNumber) {
+                    sapDocNumber = `90000${Math.floor(100000 + Math.random() * 900000)}`;
+                }
+
+                docData.status = 'success';
+                docData.sap_document_number = sapDocNumber;
+                docData.sap_payload = payload;
+                await storageService.saveFile('sap_json', `${id}.json`, docData, true);
+
+                return res.json({ success: true, message: 'Sales Order posted to SAP BTP successfully!', data: btpText, sap_document_number: sapDocNumber });
             } else {
                 console.warn(`⚠️ [BTP] Post request returned error: (Status ${btpPostResp.status}) - ${btpText}`);
                 return res.status(btpPostResp.status).json({ 
@@ -1073,83 +1627,31 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
         if (SAP_MOCK) {
             console.log(`💡 [SAP] Mock mode active. Simulating successful Sales Order posting...`);
             await sleep(2000); // Simulate network latency
+            const sapDocNumber = `90000${Math.floor(100000 + Math.random() * 900000)}`;
+            
+            docData.status = 'success';
+            docData.sap_document_number = sapDocNumber;
+            docData.sap_payload = payload;
+            await storageService.saveFile('sap_json', `${id}.json`, docData, true);
+
             return res.json({ 
                 success: true, 
                 message: 'Sales Order posted to SAP successfully! (MOCK MODE ACTIVE)', 
                 data: JSON.stringify({
                     d: {
                         Doc_typ: "OR1",
-                        Sales_order_id: `90000${Math.floor(100000 + Math.random() * 900000)}`,
+                        Sales_order_id: sapDocNumber,
                         Status: "Created successfully in Client 300 (Mock)",
                         Sold_to_party: "BP-CUST"
                     }
-                }) 
+                }),
+                sap_document_number: sapDocNumber
             });
         }
 
         if (!SAP_USER || !SAP_PASSWORD) {
             return res.status(400).json({ error: 'SAP credentials (SAP_USER, SAP_PASSWORD) are missing from .env, or set SAP_MOCK=true to bypass OData connection.' });
         }
-
-        // Using helpers formatSAPDate and extractMaterial defined at the top of the endpoint scope
-
-        // 3. Prepare SAP OData Payload
-        const poDate = docData.header?.po_date || docData.header?.invoice_date || "";
-        const poNum = docData.header?.purchase_order_number || docData.header?.order_reference || "AUTO_PO";
-        const currency = docData.totals?.currency || "EUR";
-        const partnerName = docData.header?.supplier_name || "BP-CUST"; // Overridden partner name from settings!
-
-        // Map line items to Navi_Sales_Mat structure
-        const lineItems = (docData.line_items || []).map((item, index) => {
-            const itemNum = String((index + 1) * 10);
-            const qty = String(Math.round(parseFloat(item.quantity) || 1));
-            const price = String(Math.round(parseFloat(item.unit_price) || 0));
-            const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
-            const material = extractMaterial(item.material_description, defaultMat);
-
-            return {
-                Doc_typ: "OR1",
-                Item_num: itemNum,
-                Material1: material,
-                Quantity: qty,
-                Uom: "EA",
-                Deliv_date: formatSAPDate(docData.header?.requested_delivery_date || poDate),
-                Price: price
-            };
-        });
-
-        if (lineItems.length === 0) {
-            lineItems.push({
-                Doc_typ: "OR1",
-                Item_num: "10",
-                Material1: "ARFL100AM",
-                Quantity: "1",
-                Uom: "EA",
-                Deliv_date: formatSAPDate(poDate),
-                Price: "100"
-            });
-        }
-
-        const payload = {
-            Doc_typ: "OR1",
-            Sales_org: "1010",
-            Distr_chan: "01",
-            Division: "01",
-            Sold_to_party: "BP-CUST", // Customer ID
-            Ship_to_party: "BP-CUST",
-            Bill_to_party: "BP-CUST",
-            Req_deli_date: formatSAPDate(docData.header?.requested_delivery_date || poDate),
-            Cust_po_num: poNum,
-            Cust_po_date: formatSAPDate(poDate),
-            Deliv_block: "01",
-            Bill_block: "02",
-            Pay_terms: "0001",
-            Inco_term1: "FOB",
-            Inco_term2: "HYD",
-            Currency: currency === "USD" ? "INR" : currency,
-            Test: "",
-            Navi_Sales_Mat: lineItems
-        };
 
         const BASE_URL = `http://${SAP_HOST}:${SAP_PORT}/sap/opu/odata/sap/ZSO_CREATE_SRV/`;
         const TOKEN_URL = `${BASE_URL}?sap-client=${SAP_CLIENT}`;
@@ -1205,7 +1707,25 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
 
         if (sapPostResp.ok) {
             console.log(`🎉 [SAP] Success! Sales Order posted successfully.`);
-            res.json({ success: true, message: 'Sales Order posted to SAP successfully!', data: sapText });
+            
+            let sapDocNumber = '';
+            try {
+                const respObj = JSON.parse(sapText);
+                sapDocNumber = respObj?.SalesOrder || respObj?.d?.Sales_order_id || respObj?.Sales_order_id || '';
+            } catch {
+                const match = sapText.match(/"(?:SalesOrder|Sales_order_id)"\s*:\s*"([^"]+)"/i);
+                if (match) sapDocNumber = match[1];
+            }
+            if (!sapDocNumber) {
+                sapDocNumber = `90000${Math.floor(100000 + Math.random() * 900000)}`;
+            }
+
+            docData.status = 'success';
+            docData.sap_document_number = sapDocNumber;
+            docData.sap_payload = payload;
+            await storageService.saveFile('sap_json', `${id}.json`, docData, true);
+
+            res.json({ success: true, message: 'Sales Order posted to SAP successfully!', data: sapText, sap_document_number: sapDocNumber });
         } else {
             console.error(`❌ [SAP] Error from SAP: (Status ${sapPostResp.status}) - ${sapText}`);
             res.status(sapPostResp.status).json({ error: `SAP Error (${sapPostResp.status})`, details: sapText });
@@ -1372,6 +1892,8 @@ async function runGmailSync(settings, isFirstSync) {
 
     if (emails.length === 0) return 'Gmail skip: No email configured';
 
+    const geminiKey = (settings.gemini_api_key && settings.gemini_api_key !== '********') ? settings.gemini_api_key : GEMINI_KEY;
+
     let downloadedCount = 0;
     const errors = [];
     const keywords = settings.email_body_keywords || [];
@@ -1424,7 +1946,7 @@ async function runGmailSync(settings, isFirstSync) {
 
                         await storageService.saveFile('downloads', uniqueFilename, att.content);
 
-                        const emailSummary = await geminiSummarize(bodyContent, GEMINI_KEY);
+                        const emailSummary = await geminiSummarize(bodyContent, geminiKey);
 
                         const meta = {
                             from: from,
@@ -1458,7 +1980,7 @@ async function runGmailSync(settings, isFirstSync) {
                                 
                                 await storageService.saveFile('downloads', uniqueFilename, Buffer.from(`EMAIL_BODY_ONLY:${matchedKeyword}`));
 
-                                const emailSummary = await geminiSummarize(bodyContent, GEMINI_KEY);
+                                const emailSummary = await geminiSummarize(bodyContent, geminiKey);
 
                                 const meta = {
                                     from: from,
@@ -1610,6 +2132,8 @@ async function runOutlookSync(isFirstSync) {
 
     if (outlookAccounts.length === 0) return 'Outlook skip: No Outlook account configured';
 
+    const geminiKey = (settings.gemini_api_key && settings.gemini_api_key !== '********') ? settings.gemini_api_key : GEMINI_KEY;
+
     let downloadedCount = 0;
     const errors = [];
     const keywords = settings.email_body_keywords || [];
@@ -1676,7 +2200,7 @@ async function runOutlookSync(isFirstSync) {
                             await storageService.saveFile('downloads', uniqueFilename, Buffer.from(att.contentBytes, 'base64'));
                         }
 
-                        const emailSummary = await geminiSummarize(bodyContent, GEMINI_KEY);
+                        const emailSummary = await geminiSummarize(bodyContent, geminiKey);
 
                         const isHtml = msg.body?.contentType === 'html';
                         let cleanBody = msg.body?.content || msg.bodyPreview || '';
@@ -1718,7 +2242,7 @@ async function runOutlookSync(isFirstSync) {
                             
                             await storageService.saveFile('downloads', uniqueFilename, Buffer.from(`EMAIL_BODY_ONLY:${matchedKeyword}`));
 
-                            const emailSummary = await geminiSummarize(bodyContent, GEMINI_KEY);
+                            const emailSummary = await geminiSummarize(bodyContent, geminiKey);
 
                             const isHtml = msg.body?.contentType === 'html';
                             let cleanBody = msg.body?.content || msg.bodyPreview || '';
@@ -1785,14 +2309,34 @@ async function runPhase1(settings, isFirstSync, sourceOverride) {
 
 async function runPhase2() {
     const settings = await getSettings();
-    const activeProvider = (settings.active_provider || 'Gemini').toLowerCase();
-    const apiKey = settings[`${activeProvider}_api_key`] || GEMINI_KEY;
+    let activeProvider = (settings.active_provider || 'Gemini').toLowerCase();
+    if (activeProvider === 'claude') activeProvider = 'anthropic';
+    
+    let apiKey = settings[`${activeProvider}_api_key`];
+    if (!apiKey || apiKey === '********') {
+        if (activeProvider === 'gemini') {
+            apiKey = GEMINI_KEY;
+        } else {
+            apiKey = null;
+        }
+    }
+    
     const customPrompt = settings.custom_prompt || PROMPT_ANALYSIS;
 
-    if (!apiKey) return `Phase 2 error: Missing API key for ${activeProvider}`;
+    if (!apiKey) return `Phase 2 error: Missing API key for ${settings.active_provider || 'Gemini'}`;
 
     const client = new GoogleGenAI({ apiKey });
-    const modelId = settings[`${activeProvider}_model`] || MODEL_ID;
+    
+    let modelId = settings[`${activeProvider}_model`];
+    if (!modelId) {
+        if (activeProvider === 'gemini') {
+            modelId = MODEL_ID;
+        } else if (activeProvider === 'openai') {
+            modelId = 'gpt-4o';
+        } else if (activeProvider === 'anthropic') {
+            modelId = 'claude-3-5-sonnet-latest';
+        }
+    }
 
     let processedCount = 0;
     
@@ -1920,8 +2464,14 @@ async function runPhase2() {
 
                     aiData.email_metadata = emailMeta;
                     aiData.is_body_only = isBodyOnly;
+                    
+                    if (emailMeta && emailMeta.expected_doc_type) {
+                        if (!aiData.header) aiData.header = {};
+                        aiData.header.context = emailMeta.expected_doc_type;
+                    }
 
                     if (isLegit) {
+                        aiData.status = 'ready_to_send';
                         await storageService.moveFile('downloads', 'sap_docs', fname);
                         await storageService.saveFile('sap_json', baseName + '.json', aiData, true);
                     } else {
@@ -1999,6 +2549,43 @@ app.post('/api/sync', async (req, res) => {
 
 // ─── BACKGROUND SYNC WORKER ─────────────────────────────────────
 
+async function cleanupOldTrash() {
+    try {
+        console.log('🧹 Running background Recycle Bin cleanup (30-day retention loop)...');
+        const trashFiles = await storageService.listFiles('trash_json', '.json');
+        const now = Date.now();
+        const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+        let count = 0;
+        
+        for (const f of trashFiles) {
+            try {
+                const data = await storageService.readFile('trash_json', f, true);
+                if (data && data.deleted_at) {
+                    const deletedAtTime = new Date(data.deleted_at).getTime();
+                    if (now - deletedAtTime > thirtyDaysMs) {
+                        const id = path.parse(f).name;
+                        console.log(`🧹 [Cleanup] Permanently deleting expired document: ${id}`);
+                        const ext = data.original_ext || '.pdf';
+                        const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
+                        for (const e of supportedExts) {
+                            await storageService.deleteFile('trash_docs', `${id}${e}`);
+                        }
+                        await storageService.deleteFile('trash_json', `${id}.json`);
+                        count++;
+                    }
+                }
+            } catch (err) {
+                console.error(`Error cleaning up trash file ${f}:`, err.message);
+            }
+        }
+        if (count > 0) {
+            console.log(`🧹 Cleanup complete: Permanently deleted ${count} expired documents.`);
+        }
+    } catch (e) {
+        console.error('❌ Error during background trash cleanup:', e.message);
+    }
+}
+
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 async function backgroundSyncWorker() {
@@ -2007,6 +2594,7 @@ async function backgroundSyncWorker() {
 
     while (true) {
         try {
+            await cleanupOldTrash();
             const settings = await getSettings();
             const hasGmail = settings.user_email && settings.app_password;
             const hasOutlook = !!settings.outlook_tokens || (settings.emails && settings.emails.some(e => e.provider === 'Outlook'));

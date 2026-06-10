@@ -34,7 +34,7 @@ export default function Signup() {
       });
       const data = await res.json();
       if (res.ok) {
-        toast.success("Account created successfully! Please sign in.");
+        toast.success(data.message || "Account registered successfully! Awaiting administrator approval.");
         navigate("/login");
       } else {
         toast.error(data.detail || "Failed to create account");

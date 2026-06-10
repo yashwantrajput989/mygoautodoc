@@ -27,6 +27,8 @@ const CATEGORY_MAP_LOCAL = {
     sap_docs: path.join(DATA_ROOT, 'ready_for_sap', 'documents'),
     sap_json: path.join(DATA_ROOT, 'ready_for_sap', 'json'),
     archive_junk: path.join(DATA_ROOT, 'processed_archive', 'junk'),
+    trash_docs: path.join(DATA_ROOT, 'trash', 'documents'),
+    trash_json: path.join(DATA_ROOT, 'trash', 'json'),
     settings: path.join(__dirname, 'settings.json'),
     users: path.join(__dirname, 'users.json')
 };
@@ -38,6 +40,8 @@ const CATEGORY_MAP_S3 = {
     sap_docs: 'ready_for_sap/documents/',
     sap_json: 'ready_for_sap/json/',
     archive_junk: 'processed_archive/junk/',
+    trash_docs: 'trash/documents/',
+    trash_json: 'trash/json/',
     settings: 'settings.json',
     users: 'users.json'
 };
@@ -68,7 +72,9 @@ class StorageService {
                 CATEGORY_MAP_LOCAL.metadata,
                 CATEGORY_MAP_LOCAL.sap_docs,
                 CATEGORY_MAP_LOCAL.sap_json,
-                CATEGORY_MAP_LOCAL.archive_junk
+                CATEGORY_MAP_LOCAL.archive_junk,
+                CATEGORY_MAP_LOCAL.trash_docs,
+                CATEGORY_MAP_LOCAL.trash_json
             ];
             for (const d of dirs) {
                 if (!fs.existsSync(d)) {
