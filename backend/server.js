@@ -536,6 +536,8 @@ app.post('/api/api-configs', async (req, res) => {
         key_name: req.body.key_name || '',
         key_value: req.body.key_value || '',
         oauth_token_url: req.body.oauth_token_url || '',
+        context: req.body.context || 'SalesOrder',
+        mappings: req.body.mappings || [],
         status: 'Active',
         created_at: new Date().toISOString()
     };
@@ -568,6 +570,8 @@ app.put('/api/api-configs/:id', async (req, res) => {
         username: update.username !== undefined ? update.username : current.username,
         key_name: update.key_name !== undefined ? update.key_name : current.key_name,
         oauth_token_url: update.oauth_token_url !== undefined ? update.oauth_token_url : current.oauth_token_url,
+        context: update.context !== undefined ? update.context : current.context,
+        mappings: update.mappings !== undefined ? update.mappings : current.mappings,
         client_secret: (update.client_secret && update.client_secret !== '********') ? update.client_secret : current.client_secret,
         password: (update.password && update.password !== '********') ? update.password : current.password,
         key_value: (update.key_value && update.key_value !== '********') ? update.key_value : current.key_value
@@ -707,7 +711,179 @@ app.post('/api/api-configs/test', async (req, res) => {
     }
 });
 
+app.post('/api/api-configs/fetch-schema', async (req, res) => {
+    const { endpoint, id, auth_type, client_id, client_secret, oauth_token_url, username, password, key_name, key_value } = req.body;
+    if (!endpoint) {
+        return res.status(400).json({ status: 'error', message: 'Endpoint URL is required' });
+    }
+
+    const settings = await getSettings();
+    const storedConfig = (settings.api_configs || []).find(c => c.id === id || c.endpoint === endpoint) || {};
+
+    const resolvedAuthType = auth_type || storedConfig.auth_type || 'None';
+    let resolvedEndpoint = String(endpoint).trim();
+    
+    // Attempt to append OData parameters to limit to 1 record to save bandwidth/speed
+    if (!resolvedEndpoint.includes('$top=') && !resolvedEndpoint.includes('limit=')) {
+        const separator = resolvedEndpoint.includes('?') ? '&' : '?';
+        resolvedEndpoint = `${resolvedEndpoint}${separator}$top=1`;
+    }
+
+    let headers = {
+        'Accept': 'application/json'
+    };
+
+    try {
+        if (resolvedAuthType === 'OAuth2') {
+            const tokenUrl = String(oauth_token_url || storedConfig.oauth_token_url || '').trim();
+            const cId = String(client_id || storedConfig.client_id || '').trim();
+            let cSecret = String(client_secret || storedConfig.client_secret || '').trim();
+            if (cSecret === '********' && storedConfig.client_secret) {
+                cSecret = storedConfig.client_secret;
+            }
+            if (!tokenUrl || !cId || !cSecret) {
+                return res.json({ status: 'error', message: 'OAuth2 configuration is incomplete' });
+            }
+            
+            let tokenRes;
+            try {
+                tokenRes = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({
+                        grant_type: 'client_credentials',
+                        client_id: cId,
+                        client_secret: cSecret
+                    })
+                });
+            } catch (err) {
+                tokenRes = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        grant_type: 'client_credentials',
+                        client_id: cId,
+                        client_secret: cSecret
+                    })
+                });
+            }
+            
+            if (!tokenRes.ok) {
+                return res.json({ status: 'error', message: `OAuth2 token request failed: Status ${tokenRes.status}` });
+            }
+            const tokenData = await tokenRes.json();
+            const bearerToken = tokenData.access_token || tokenData.token;
+            if (!bearerToken) {
+                return res.json({ status: 'error', message: 'No access token returned' });
+            }
+            headers['Authorization'] = `Bearer ${bearerToken}`;
+        } else if (resolvedAuthType === 'API Key') {
+            const kName = key_name || storedConfig.key_name || 'X-API-Key';
+            let kValue = key_value || storedConfig.key_value;
+            if (kValue === '********' && storedConfig.key_value) {
+                kValue = storedConfig.key_value;
+            }
+            if (kValue) {
+                headers[kName] = kValue;
+            }
+        } else if (resolvedAuthType === 'Basic Auth') {
+            const uName = username || storedConfig.username;
+            let pWord = password || storedConfig.password;
+            if (pWord === '********' && storedConfig.password) {
+                pWord = storedConfig.password;
+            }
+            if (uName && pWord) {
+                const credentials = Buffer.from(`${uName}:${pWord}`).toString('base64');
+                headers['Authorization'] = `Basic ${credentials}`;
+            }
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        
+        console.log(`🌐 Querying schema from ${resolvedEndpoint}...`);
+        const queryRes = await fetch(resolvedEndpoint, { 
+            method: 'GET',
+            headers: headers,
+            signal: controller.signal 
+        });
+        clearTimeout(timeoutId);
+        
+        if (!queryRes.ok) {
+            return res.json({ status: 'error', message: `Endpoint returned HTTP ${queryRes.status}` });
+        }
+        
+        const responseData = await queryRes.json();
+        
+        // Find the record object
+        let record = null;
+        if (responseData) {
+            if (Array.isArray(responseData)) {
+                record = responseData[0];
+            } else if (responseData.value && Array.isArray(responseData.value)) {
+                record = responseData.value[0];
+            } else if (responseData.d && Array.isArray(responseData.d.results)) {
+                record = responseData.d.results[0];
+            } else if (responseData.d && responseData.d.value && Array.isArray(responseData.d.value)) {
+                record = responseData.d.value[0];
+            } else if (typeof responseData === 'object') {
+                record = responseData;
+            }
+        }
+        
+        if (!record) {
+            return res.json({ status: 'error', message: 'No records or objects could be found in the response' });
+        }
+        
+        // Extract flat keys, ignoring OData / metadata fields
+        const keys = Object.keys(record).filter(key => {
+            const val = record[key];
+            const isMeta = key.startsWith('@') || key.startsWith('__') || key.startsWith('metadata');
+            const isPrimitive = typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val === null;
+            return !isMeta && isPrimitive;
+        });
+        
+        const fields = keys.map(k => ({
+            id: k,
+            label: k,
+            desc: `Fetched key: ${k}`
+        }));
+        
+        res.json({ status: 'success', fields });
+    } catch (e) {
+        res.json({ 
+            status: 'error', 
+            message: e.name === 'AbortError' ? 'Connection timed out' : e.message 
+        });
+    }
+});
+
 // ─── OUTLOOK OAUTH ENDPOINTS ─────────────────────────────────────
+
+const msalCachePlugin = {
+    beforeCacheAccess: async (cacheContext) => {
+        try {
+            const settings = await getSettings();
+            if (settings.msal_cache) {
+                cacheContext.tokenCache.deserialize(settings.msal_cache);
+            }
+        } catch (err) {
+            console.error('Error deserializing MSAL cache:', err.message);
+        }
+    },
+    afterCacheAccess: async (cacheContext) => {
+        if (cacheContext.cacheHasChanged) {
+            try {
+                const settings = await getSettings();
+                settings.msal_cache = cacheContext.tokenCache.serialize();
+                await saveSettings(settings);
+                console.log('💾 [OUTLOOK] MSAL Cache serialized and saved to settings.');
+            } catch (err) {
+                console.error('Error serializing MSAL cache:', err.message);
+            }
+        }
+    }
+};
 
 function getMsalApp() {
     if (!OUTLOOK_CLIENT_ID || !OUTLOOK_CLIENT_SECRET) {
@@ -720,6 +896,9 @@ function getMsalApp() {
             authority: AUTHORITY,
             clientSecret: OUTLOOK_CLIENT_SECRET,
         },
+        cache: {
+            cachePlugin: msalCachePlugin
+        }
     });
 }
 
@@ -1275,10 +1454,15 @@ function getHumanReadableId(docId) {
 
 function buildSAPPayload(docData, settings) {
     const apiConfigs = settings.api_configs || [];
-    const btpConfig = apiConfigs.find(c => 
-        c.status === 'Active' && 
-        (c.auth_type === 'OAuth2' || c.name?.toLowerCase().includes('btp') || c.name?.toLowerCase().includes('sales order') || c.endpoint?.includes('/odata/v4/sales-order'))
-    );
+    
+    // Determine the document context
+    const docContext = docData.header?.context || docData.email_metadata?.expected_doc_type || 'SalesOrder';
+    const normalizedDocContext = (docContext.toLowerCase().includes('invoice') || docContext.toLowerCase().includes('vendor')) ? 'VendorInvoice' : 'SalesOrder';
+    
+    // Find active config for this context, or fallback to any active config
+    const btpConfig = apiConfigs.find(c => c.status === 'Active' && c.context === normalizedDocContext) || 
+                      apiConfigs.find(c => c.status === 'Active');
+                      
     const SAP_BTP_ENABLED = (process.env.SAP_BTP_ENABLED === "true") || !!btpConfig;
 
     const formatSAPDate = (dateStr) => {
@@ -1292,6 +1476,90 @@ function buildSAPPayload(docData, settings) {
         return match ? match[0] : fallback;
     };
 
+    const formatBTPDate = (dateStr) => {
+        if (!dateStr) return new Date().toISOString().slice(0, 10);
+        const match = dateStr.match(/^(\d{4})[-/]?(\d{2})[-/]?(\d{2})/);
+        if (match) {
+            return `${match[1]}-${match[2]}-${match[3]}`;
+        }
+        return dateStr;
+    };
+
+    // ─── DYNAMIC PER-CONNECTION SCHEMA MAPPING ────────────────────
+    if (btpConfig && btpConfig.mappings && btpConfig.mappings.length > 0) {
+        console.log(`🔌 [SAP] Generating dynamic payload using custom mappings for API config: "${btpConfig.name}" (Context: ${btpConfig.context})`);
+        
+        const payload = {};
+        
+        // Define default values for standard fields if not mapped
+        if (btpConfig.context === 'SalesOrder') {
+            payload.SalesOrderType = "OR1";
+            payload.SalesOrganization = "1010";
+            payload.DistributionChannel = "01";
+            payload.OrganizationDivision = "01";
+        }
+        
+        // Header & Footer mapping
+        btpConfig.mappings.forEach(m => {
+            const isItemSource = ["item_number", "customer_material_number", "material_description", "sap_material_number", "quantity", "unit_of_measure", "price", "amount", "tax", "supplier_material_number"].includes(m.sourceField);
+            if (!isItemSource) {
+                let val = docData.header?.[m.sourceField] || docData.totals?.[m.sourceField] || "";
+                
+                // Format dates if the target field indicates it's a date
+                if (m.targetField.toLowerCase().includes('date') && val) {
+                    val = SAP_BTP_ENABLED ? formatBTPDate(val) : formatSAPDate(val);
+                }
+                
+                // Special check for SoldToParty / Supplier length limits
+                if (['SoldToParty', 'Supplier', 'Sold_to_party', 'SupplierName'].includes(m.targetField)) {
+                    if (String(val).length > 10) val = "BP-CUST";
+                }
+                
+                payload[m.targetField] = val;
+            }
+        });
+        
+        // Line items mapping
+        const lineItems = (docData.line_items || []).map((item, index) => {
+            const itemPayload = {};
+            if (btpConfig.context === 'SalesOrder') {
+                itemPayload.ProductionPlant = "1010";
+                itemPayload.SalesOrderItem = item.item_number || String((index + 1) * 10);
+                itemPayload.Material = "ARFL100AM";
+                itemPayload.RequestedQuantity = "1";
+                itemPayload.RequestedQuantityUnit = "EA";
+            } else {
+                itemPayload.SupplierInvoiceItem = item.item_number || String(index + 1);
+                itemPayload.Quantity = "1";
+                itemPayload.UnitOfMeasure = "EA";
+            }
+            
+            btpConfig.mappings.forEach(m => {
+                const isItemSource = ["item_number", "customer_material_number", "material_description", "sap_material_number", "quantity", "unit_of_measure", "price", "amount", "tax", "supplier_material_number"].includes(m.sourceField);
+                if (isItemSource) {
+                    let val = item[m.sourceField] || "";
+                    
+                    if ((m.targetField === 'Material' || m.targetField === 'Material1') && item.material_description) {
+                        val = extractMaterial(item.material_description, "ARFL100AM");
+                    }
+                    if (m.targetField === 'RequestedQuantity' || m.targetField === 'Quantity') {
+                        val = String(Math.round(parseFloat(val) || 1));
+                    }
+                    
+                    itemPayload[m.targetField] = val;
+                }
+            });
+            return itemPayload;
+        });
+        
+        // Nest line items under the standard key depending on OData/BTP vs RFC/Local
+        const itemKey = SAP_BTP_ENABLED ? 'to_Item' : 'Navi_Sales_Mat';
+        payload[itemKey] = lineItems;
+        
+        return payload;
+    }
+
+    // ─── BACKWARD COMPATIBLE FALLBACK PAYLOADS ────────────────────
     const poDate = docData.header?.order_received_date || docData.header?.requested_date || docData.header?.invoice_date || docData.header?.po_date || "";
     const poNum = docData.header?.customer_po_number || docData.header?.po_number || docData.header?.purchase_order_number || docData.header?.order_reference || "AUTO_PO";
     const currency = docData.totals?.currency || "USD";
@@ -1302,15 +1570,6 @@ function buildSAPPayload(docData, settings) {
     const shipToParty = String(docData.header?.ship_to_party_number || soldToParty).trim();
 
     if (SAP_BTP_ENABLED) {
-        const formatBTPDate = (dateStr) => {
-            if (!dateStr) return new Date().toISOString().slice(0, 10);
-            const match = dateStr.match(/^(\d{4})[-/]?(\d{2})[-/]?(\d{2})/);
-            if (match) {
-                return `${match[1]}-${match[2]}-${match[3]}`;
-            }
-            return dateStr;
-        };
-
         const btpDate = formatBTPDate(poDate);
         const reqDeliveryDate = formatBTPDate(docData.header?.requested_date || docData.header?.requested_delivery_date || poDate);
 
@@ -2021,7 +2280,7 @@ async function runGmailSync(settings, isFirstSync) {
     return summary;
 }
 
-async function getOutlookToken(tokens) {
+async function getOutlookToken(tokens, userEmail) {
     if (!tokens) {
         const settings = await getSettings();
         tokens = settings.outlook_tokens;
@@ -2033,49 +2292,31 @@ async function getOutlookToken(tokens) {
         return tokens.access_token;
     }
 
-    if (!tokens.refresh_token) {
-        console.log('--- [OUTLOOK] Token expired and no refresh token found. Re-login required. ---');
-        return tokens.access_token;
-    }
-
-    console.log(`🔑 [OUTLOOK] Access token expired. Attempting token refresh using refresh token for ${tokens.user_principal_name || 'Outlook account'}...`);
+    const emailToUse = userEmail || tokens.user_principal_name;
+    console.log(`🔑 [OUTLOOK] Access token expired or expiring soon. Attempting token refresh via MSAL acquireTokenSilent for ${emailToUse || 'Outlook account'}...`);
     try {
-        const tenantId = process.env.OUTLOOK_TENANT_ID || 'common';
-        const clientId = process.env.OUTLOOK_CLIENT_ID;
-        const clientSecret = process.env.OUTLOOK_CLIENT_SECRET;
-
-        if (!clientId || !clientSecret) {
-            console.error('❌ [OUTLOOK] Cannot refresh token: OUTLOOK_CLIENT_ID or OUTLOOK_CLIENT_SECRET is missing from .env');
-            return tokens.access_token;
+        const msalApp = getMsalApp();
+        if (!msalApp) {
+            throw new Error('MSAL application failed to initialize');
         }
 
-        const response = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                client_id: clientId,
-                client_secret: clientSecret,
-                grant_type: 'refresh_token',
-                refresh_token: tokens.refresh_token,
-                scope: 'https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read offline_access'
-            })
+        const accounts = await msalApp.getTokenCache().getAllAccounts();
+        const account = accounts.find(a => a.username.toLowerCase() === emailToUse?.toLowerCase()) || accounts[0];
+
+        if (!account) {
+            throw new Error(`No account found in MSAL token cache for ${emailToUse}`);
+        }
+
+        const silentResult = await msalApp.acquireTokenSilent({
+            account: account,
+            scopes: SCOPE
         });
 
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Token refresh request failed with status ${response.status}: ${errText}`);
-        }
-
-        const data = await response.json();
-        if (!data.access_token) {
-            throw new Error('No access_token returned in refresh response');
-        }
-
         const newTokens = {
-            access_token: data.access_token,
-            refresh_token: data.refresh_token || tokens.refresh_token,
-            expires_at: (Date.now() / 1000) + (data.expires_in || 3600),
-            user_principal_name: tokens.user_principal_name
+            access_token: silentResult.accessToken,
+            refresh_token: tokens.refresh_token || '', // MSAL manages it in the cache, but preserve existing if any
+            expires_at: (Date.now() / 1000) + (silentResult.expiresOn ? (silentResult.expiresOn.getTime() - Date.now()) / 1000 : 3600),
+            user_principal_name: silentResult.account?.username || emailToUse
         };
 
         // Update settings dynamically to persist new tokens
@@ -2083,7 +2324,7 @@ async function getOutlookToken(tokens) {
         let updated = false;
 
         // 1. Update root settings outlook_tokens if active
-        if (settings.outlook_tokens && settings.outlook_tokens.user_principal_name?.toLowerCase() === tokens.user_principal_name?.toLowerCase()) {
+        if (settings.outlook_tokens && settings.outlook_tokens.user_principal_name?.toLowerCase() === emailToUse?.toLowerCase()) {
             settings.outlook_tokens = newTokens;
             updated = true;
         }
@@ -2091,7 +2332,7 @@ async function getOutlookToken(tokens) {
         // 2. Update accounts list inside settings.emails
         if (settings.emails && Array.isArray(settings.emails)) {
             settings.emails = settings.emails.map(e => {
-                if (e.provider === 'Outlook' && e.email?.toLowerCase() === tokens.user_principal_name?.toLowerCase()) {
+                if (e.provider === 'Outlook' && e.email?.toLowerCase() === emailToUse?.toLowerCase()) {
                     updated = true;
                     return {
                         ...e,
@@ -2104,7 +2345,7 @@ async function getOutlookToken(tokens) {
 
         if (updated) {
             await saveSettings(settings);
-            console.log(`💾 [OUTLOOK] Persisted refreshed tokens successfully for ${tokens.user_principal_name}.`);
+            console.log(`💾 [OUTLOOK] Persisted refreshed tokens successfully for ${emailToUse}.`);
         }
 
         // Update the reference so calling code has the new one immediately
@@ -2112,7 +2353,74 @@ async function getOutlookToken(tokens) {
 
         return newTokens.access_token;
     } catch (err) {
-        console.error(`❌ [OUTLOOK] Failed to refresh Outlook access token: ${err.message}`);
+        console.error(`❌ [OUTLOOK] Failed to refresh Outlook access token via MSAL: ${err.message}`);
+        
+        // Fallback to manual refresh_token logic if it exists (for backward compatibility)
+        if (tokens.refresh_token) {
+            console.log('🔄 [OUTLOOK] Attempting manual refresh token fallback...');
+            try {
+                const tenantId = process.env.OUTLOOK_TENANT_ID || 'common';
+                const clientId = process.env.OUTLOOK_CLIENT_ID;
+                const clientSecret = process.env.OUTLOOK_CLIENT_SECRET;
+
+                if (!clientId || !clientSecret) {
+                    throw new Error('OUTLOOK_CLIENT_ID or OUTLOOK_CLIENT_SECRET missing');
+                }
+
+                const response = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        grant_type: 'refresh_token',
+                        refresh_token: tokens.refresh_token,
+                        scope: 'https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read offline_access'
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const newTokens = {
+                        access_token: data.access_token,
+                        refresh_token: data.refresh_token || tokens.refresh_token,
+                        expires_at: (Date.now() / 1000) + (data.expires_in || 3600),
+                        user_principal_name: tokens.user_principal_name
+                    };
+
+                    const settings = await getSettings();
+                    let updated = false;
+
+                    if (settings.outlook_tokens && settings.outlook_tokens.user_principal_name?.toLowerCase() === tokens.user_principal_name?.toLowerCase()) {
+                        settings.outlook_tokens = newTokens;
+                        updated = true;
+                    }
+
+                    if (settings.emails && Array.isArray(settings.emails)) {
+                        settings.emails = settings.emails.map(e => {
+                            if (e.provider === 'Outlook' && e.email?.toLowerCase() === tokens.user_principal_name?.toLowerCase()) {
+                                updated = true;
+                                return {
+                                    ...e,
+                                    outlook_tokens: newTokens
+                                };
+                            }
+                            return e;
+                        });
+                    }
+
+                    if (updated) {
+                        await saveSettings(settings);
+                    }
+
+                    Object.assign(tokens, newTokens);
+                    return newTokens.access_token;
+                }
+            } catch (fallbackErr) {
+                console.error(`❌ [OUTLOOK] Manual refresh token fallback failed: ${fallbackErr.message}`);
+            }
+        }
+        
         return tokens.access_token;
     }
 }
@@ -2139,7 +2447,7 @@ async function runOutlookSync(isFirstSync) {
     const keywords = settings.email_body_keywords || [];
 
     for (const account of outlookAccounts) {
-        const token = await getOutlookToken(account.outlook_tokens);
+        const token = await getOutlookToken(account.outlook_tokens, account.email);
         if (!token) {
             errors.push(`${account.email}: Failed to get access token`);
             continue;

@@ -329,6 +329,10 @@ export default function Documents() {
       comparison = getAmountValue(a) - getAmountValue(b);
     } else if (sortColumn === "date") {
       comparison = getDocDate(a) - getDocDate(b);
+    } else if (sortColumn === "sap_doc") {
+      const aVal = a.data?.sap_document_number || a.sap_document_number || "";
+      const bVal = b.data?.sap_document_number || b.sap_document_number || "";
+      comparison = aVal.localeCompare(bVal);
     } else if (sortColumn === "status") {
       comparison = (a.status || "").localeCompare(b.status || "");
     }
@@ -480,6 +484,12 @@ export default function Documents() {
                       <SortIcon active={sortColumn === "date"} direction={sortDirection} />
                     </div>
                   </th>
+                  <th onClick={() => handleSort("sap_doc")} className="cursor-pointer select-none hover:bg-muted/50 p-3">
+                    <div className="flex items-center gap-1">
+                      <span>SAP Doc #</span>
+                      <SortIcon active={sortColumn === "sap_doc"} direction={sortDirection} />
+                    </div>
+                  </th>
                   <th onClick={() => handleSort("status")} className="cursor-pointer select-none hover:bg-muted/50 p-3">
                     <div className="flex items-center gap-1">
                       <span>Status</span>
@@ -524,6 +534,9 @@ export default function Documents() {
                     <td className="text-muted-foreground">
                       {getDisplayDate(doc)}
                     </td>
+                    <td className="font-mono text-xs font-semibold text-foreground">
+                      {doc.data?.sap_document_number || doc.sap_document_number || "—"}
+                    </td>
                     <td>
                       <StatusBadge status={doc.status} />
                     </td>
@@ -559,7 +572,7 @@ export default function Documents() {
                 ))}
                 {sortedAndFilteredDocs.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="text-center py-12 text-muted-foreground">
+                    <td colSpan={9} className="text-center py-12 text-muted-foreground">
                       <div className="flex flex-col items-center gap-2">
                         <Mail className="h-8 w-8 opacity-20" />
                         <p>

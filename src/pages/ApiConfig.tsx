@@ -81,17 +81,17 @@ export default function ApiConfig() {
   const [activeConfigName, setActiveConfigName] = useState("");
   const [activeEndpoint, setActiveEndpoint] = useState("");
 
-  // Schema Mapping State
-  const [schemaType, setSchemaType] = useState<"SalesOrder" | "VendorInvoice">("SalesOrder");
-  const [mappings, setMappings] = useState<Record<string, { sourceField: string; targetField: string }[]>>({
-    SalesOrder: DEFAULT_SALES_ORDER_MAPPINGS,
-    VendorInvoice: DEFAULT_VENDOR_INVOICE_MAPPINGS
-  });
+  // Per-connection Schema Mapping State (collapsed inside adding page)
+  const [formContext, setFormContext] = useState<"SalesOrder" | "VendorInvoice">("SalesOrder");
+  const [formMappings, setFormMappings] = useState<{ sourceField: string; targetField: string }[]>([]);
+  const [isMappingExpanded, setIsMappingExpanded] = useState(false);
+  const [fetchedTargetFields, setFetchedTargetFields] = useState<any[] | null>(null);
+  const [isFetchingSchema, setIsFetchingSchema] = useState(false);
+
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
-  const [isSavingMappings, setIsSavingMappings] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [lines, setLines] = useState<{ x1: number; y1: number; x2: number; y2: number; id: string }[]>([]);
-  const [activeTab, setActiveTab] = useState<"catalog" | "explorer" | "mapper">("catalog");
+  const [activeTab, setActiveTab] = useState<"catalog" | "explorer">("catalog");
 
   // Form State
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -120,21 +120,29 @@ export default function ApiConfig() {
     }
   };
 
-  const fetchSettings = async () => {
+  const fetchLiveSalesOrders = async () => {
+    setIsFetchingBtp(true);
+    const toastId = toast.loading("Connecting to SAP BTP and fetching live Sales Orders...");
     try {
-      const res = await fetch(`${API_BASE}/settings`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.field_mappings) {
-          setMappings(data.field_mappings);
-        }
+      const res = await fetch(`${API_BASE}/sap-btp/sales-orders`);
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success(data.message || "Successfully fetched Sales Orders from SAP BTP!", { id: toastId });
+        setBtpData(data.data?.value || data.data || []);
+        setActiveConfigName(data.configName || "");
+        setActiveEndpoint(data.endpoint || "");
+      } else {
+        toast.error(data.error || "Failed to fetch live Sales Orders", { id: toastId });
       }
-    } catch {}
+    } catch (err: any) {
+      toast.error("Error connecting to server to fetch BTP Sales Orders", { id: toastId });
+    } finally {
+      setIsFetchingBtp(false);
+    }
   };
 
   useEffect(() => {
     fetchApis();
-    fetchSettings();
   }, []);
 
   const handleOpenAdd = () => {
@@ -149,6 +157,10 @@ export default function ApiConfig() {
     setFormKeyName("");
     setFormKeyValue("");
     setFormOauthTokenUrl("");
+    setFormContext("SalesOrder");
+    setFormMappings(DEFAULT_SALES_ORDER_MAPPINGS);
+    setIsMappingExpanded(false);
+    setFetchedTargetFields(null);
     setIsModalOpen(true);
   };
 
@@ -164,6 +176,12 @@ export default function ApiConfig() {
     setFormKeyName(api.key_name || "");
     setFormKeyValue(api.key_value || "");
     setFormOauthTokenUrl(api.oauth_token_url || "");
+    
+    const contextVal = (api.context || "SalesOrder") as "SalesOrder" | "VendorInvoice";
+    setFormContext(contextVal);
+    setFormMappings(api.mappings || (contextVal === "VendorInvoice" ? DEFAULT_VENDOR_INVOICE_MAPPINGS : DEFAULT_SALES_ORDER_MAPPINGS));
+    setIsMappingExpanded(false);
+    setFetchedTargetFields(null);
     setIsModalOpen(true);
   };
 
@@ -189,6 +207,11 @@ export default function ApiConfig() {
       return;
     }
 
+    if (!formMappings || formMappings.length === 0) {
+      toast.error("Field mappings are mandatory to save the API connection. Please expand the 'Field Mappings' section and configure them.");
+      return;
+    }
+
     const payload = {
       name: formName,
       endpoint: formEndpoint,
@@ -199,7 +222,9 @@ export default function ApiConfig() {
       password: formPassword,
       key_name: formKeyName,
       key_value: formKeyValue,
-      oauth_token_url: formOauthTokenUrl
+      oauth_token_url: formOauthTokenUrl,
+      context: formContext,
+      mappings: formMappings
     };
 
     try {
@@ -258,32 +283,6 @@ export default function ApiConfig() {
     }
   };
 
-  const fetchLiveSalesOrders = async () => {
-    setIsFetchingBtp(true);
-    const toastId = toast.loading("Authenticating & querying BTP OData service...", { duration: 10000 });
-    try {
-      const res = await fetch(`${API_BASE}/sap-btp/sales-orders`);
-      const data = await res.json();
-      
-      if (res.ok && data.success) {
-        toast.success(data.message || "Live Sales Orders retrieved successfully!", { id: toastId });
-        const orders = data.data?.value || data.data || [];
-        setBtpData(Array.isArray(orders) ? orders : []);
-        setActiveConfigName(data.configName);
-        setActiveEndpoint(data.endpoint);
-      } else {
-        toast.error(data.error || "Failed to retrieve BTP data", { id: toastId });
-        if (data.details) {
-          console.error("BTP fetch details:", data.details);
-        }
-      }
-    } catch (err: any) {
-      toast.error(err.message || "Failed to reach backend API explorer", { id: toastId });
-    } finally {
-      setIsFetchingBtp(false);
-    }
-  };
-
   const toggleShowSecret = (id: string) => {
     setShowSecret(prev => ({ ...prev, [id]: !prev[id] }));
   };
@@ -295,9 +294,12 @@ export default function ApiConfig() {
 
   // Mappings visual updates
   const calculateLines = () => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !isModalOpen || !isMappingExpanded) {
+      setLines([]);
+      return;
+    }
     const containerRect = containerRef.current.getBoundingClientRect();
-    const activeMappings = mappings[schemaType] || [];
+    const activeMappings = formMappings || [];
     const newLines: any[] = [];
 
     activeMappings.forEach((m) => {
@@ -324,13 +326,13 @@ export default function ApiConfig() {
     window.addEventListener("resize", calculateLines);
     
     // A small timeout helps render coordinates correctly after DOM adjustments
-    const t = setTimeout(calculateLines, 100);
+    const t = setTimeout(calculateLines, 200);
 
     return () => {
       window.removeEventListener("resize", calculateLines);
       clearTimeout(t);
     };
-  }, [mappings, schemaType, isLoading]);
+  }, [formMappings, formContext, isMappingExpanded, isModalOpen]);
 
   const handleSourceClick = (srcId: string) => {
     if (selectedSource === srcId) {
@@ -347,68 +349,74 @@ export default function ApiConfig() {
       return;
     }
 
-    const currentTypeMappings = mappings[schemaType] || [];
+    const currentTypeMappings = formMappings || [];
     // Remove any existing mappings for this target or source to prevent multi-mappings
     const filtered = currentTypeMappings.filter(
       (m) => m.targetField !== tgtId && m.sourceField !== selectedSource
     );
 
     const updated = [...filtered, { sourceField: selectedSource, targetField: tgtId }];
-    setMappings((prev) => ({
-      ...prev,
-      [schemaType]: updated
-    }));
+    setFormMappings(updated);
     setSelectedSource(null);
     toast.success(`Mapped "${selectedSource}" to "${tgtId}"`);
   };
 
   const handleDisconnect = (srcId: string, tgtId: string) => {
-    const currentTypeMappings = mappings[schemaType] || [];
+    const currentTypeMappings = formMappings || [];
     const updated = currentTypeMappings.filter(
       (m) => !(m.sourceField === srcId && m.targetField === tgtId)
     );
-    setMappings((prev) => ({
-      ...prev,
-      [schemaType]: updated
-    }));
+    setFormMappings(updated);
     toast.success(`Disconnected mapping`);
   };
 
   const handleResetDefaults = () => {
-    setMappings((prev) => ({
-      ...prev,
-      [schemaType]: schemaType === "SalesOrder" ? DEFAULT_SALES_ORDER_MAPPINGS : DEFAULT_VENDOR_INVOICE_MAPPINGS
-    }));
+    setFormMappings(formContext === "SalesOrder" ? DEFAULT_SALES_ORDER_MAPPINGS : DEFAULT_VENDOR_INVOICE_MAPPINGS);
     setSelectedSource(null);
     toast.success(`Mappings reset to defaults`);
   };
 
   const handleClearAll = () => {
-    setMappings((prev) => ({
-      ...prev,
-      [schemaType]: []
-    }));
+    setFormMappings([]);
     setSelectedSource(null);
     toast.success(`All active mappings cleared`);
   };
 
-  const handleSaveMappings = async () => {
-    setIsSavingMappings(true);
+  const handleFetchSchema = async () => {
+    if (!formEndpoint.trim()) {
+      toast.error("Endpoint URL is required to fetch schema");
+      return;
+    }
+    setIsFetchingSchema(true);
+    const toastId = toast.loading("Connecting to API endpoint and fetching schema fields...");
     try {
-      const res = await fetch(`${API_BASE}/settings/mappings`, {
+      const res = await fetch(`${API_BASE}/api-configs/fetch-schema`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mappings })
+        body: JSON.stringify({
+          endpoint: formEndpoint,
+          auth_type: formAuthType,
+          oauth_token_url: formOauthTokenUrl,
+          client_id: formClientId,
+          client_secret: formClientSecret,
+          username: formUsername,
+          password: formPassword,
+          key_name: formKeyName,
+          key_value: formKeyValue
+        })
       });
-      if (res.ok) {
-        toast.success("Database schema mappings saved successfully!");
+      const data = await res.json();
+      if (res.ok && data.status === "success") {
+        toast.success(`Successfully fetched ${data.fields.length} fields from endpoint!`, { id: toastId });
+        setFetchedTargetFields(data.fields);
       } else {
-        toast.error("Failed to save mappings");
+        toast.error(data.message || "Failed to fetch schema fields. Falling back to default schema.", { id: toastId });
       }
-    } catch {
-      toast.error("Failed to connect to backend mappings API");
+    } catch (err: any) {
+      toast.error("Error connecting to server to fetch schema. Falling back to default schema.", { id: toastId });
     } finally {
-      setIsSavingMappings(false);
+      setIsFetchingSchema(false);
+      setTimeout(calculateLines, 100);
     }
   };
 
@@ -533,8 +541,13 @@ export default function ApiConfig() {
     ]
   };
 
-  const getSourceCategories = () => (schemaType === "SalesOrder" ? SALES_ORDER_SOURCE : VENDOR_INVOICE_SOURCE);
-  const getTargetCategories = () => (schemaType === "SalesOrder" ? SALES_ORDER_TARGET : VENDOR_INVOICE_TARGET);
+  const getSourceCategories = () => (formContext === "SalesOrder" ? SALES_ORDER_SOURCE : VENDOR_INVOICE_SOURCE);
+  const getTargetCategories = () => {
+    if (fetchedTargetFields && fetchedTargetFields.length > 0) {
+      return { "Fetched API Fields": fetchedTargetFields };
+    }
+    return formContext === "SalesOrder" ? SALES_ORDER_TARGET : VENDOR_INVOICE_TARGET;
+  };
 
   return (
     <div className="fiori-page animate-in fade-in duration-300">
@@ -596,21 +609,6 @@ export default function ApiConfig() {
         >
           <Activity className="h-4 w-4" />
           Live BTP Explorer
-        </button>
-        <button
-          onClick={() => {
-            setActiveTab("mapper");
-            setTimeout(calculateLines, 100);
-          }}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2 text-xs font-bold transition-all rounded-md",
-            activeTab === "mapper"
-              ? "bg-card text-primary shadow-sm border border-border"
-              : "text-muted-foreground hover:text-foreground border border-transparent"
-          )}
-        >
-          <Database className="h-4 w-4" />
-          SAP Schema Mapper
         </button>
       </div>
 
@@ -831,244 +829,10 @@ export default function ApiConfig() {
         </div>
       )}
 
-      {activeTab === "mapper" && (
-        <div className="fiori-card p-6 space-y-6 animate-in fade-in duration-300">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-border pb-4 gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center text-primary">
-                  <Database className="h-4 w-4" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-primary">
-                    SAP DB Schema Field Mapper
-                  </h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Establish live translation rules mapping parsed document structures directly to SAP OData properties.
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 items-center">
-              <div className="bg-muted p-1 rounded-lg border border-border flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => { setSchemaType("SalesOrder"); setSelectedSource(null); }}
-                  className={cn(
-                    "px-3 py-1 text-xs font-bold rounded transition-all",
-                    schemaType === "SalesOrder"
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  Sales Order Schema
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setSchemaType("VendorInvoice"); setSelectedSource(null); }}
-                  className={cn(
-                    "px-3 py-1 text-xs font-bold rounded transition-all",
-                    schemaType === "VendorInvoice"
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  Vendor Invoice Schema
-                </button>
-              </div>
-              <button
-                onClick={handleResetDefaults}
-                className="px-3 py-1.5 text-xs font-semibold border border-border rounded hover:bg-muted transition-colors flex items-center gap-1.5"
-                title="Reset configuration to initial defaults"
-              >
-                <Shuffle className="h-3.5 w-3.5" /> Reset Defaults
-              </button>
-              <button
-                onClick={handleClearAll}
-                className="px-3 py-1.5 text-xs font-semibold text-destructive border border-destructive/20 rounded hover:bg-destructive/5 transition-colors flex items-center gap-1.5"
-                title="Clear all connections"
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Clear All
-              </button>
-              <button
-                onClick={handleSaveMappings}
-                disabled={isSavingMappings}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow-md transition-all active:scale-95 disabled:opacity-50"
-              >
-                <Save className={cn("h-3.5 w-3.5", isSavingMappings && "animate-spin")} />
-                {isSavingMappings ? "Saving..." : "Save Schema Mappings"}
-              </button>
-            </div>
-          </div>
-
-          {/* Mapper Workspace Panel */}
-          <div className="bg-muted/10 p-3 rounded-lg border border-border text-xs flex items-center gap-2 text-muted-foreground">
-            <Info className="h-4 w-4 text-primary shrink-0" />
-            <span>
-              <strong>Interactive Connecting Guide:</strong> Click a circular dot next to an <strong>Extracted Field (Left)</strong> to enter mapping mode, then click a dot next to an <strong>SAP API Target Field (Right)</strong> to link them together. Existing mappings are represented by pulsed connecting lines.
-            </span>
-          </div>
-
-          <div ref={containerRef} className="relative grid grid-cols-1 md:grid-cols-2 gap-24 p-6 bg-card rounded-xl border border-border overflow-hidden">
-            {/* SVG Overlay Drawing Connecting Paths */}
-            <svg className="absolute inset-0 pointer-events-none w-full h-full z-10">
-              {lines.map((line) => {
-                const dx = Math.abs(line.x2 - line.x1) * 0.45;
-                const pathD = `M ${line.x1} ${line.y1} C ${line.x1 + dx} ${line.y1}, ${line.x2 - dx} ${line.y2}, ${line.x2} ${line.y2}`;
-                return (
-                  <g key={line.id}>
-                    <path
-                      d={pathD}
-                      fill="none"
-                      stroke="var(--primary)"
-                      strokeWidth="3.5"
-                      className="opacity-15 stroke-primary"
-                    />
-                    <path
-                      d={pathD}
-                      fill="none"
-                      stroke="var(--primary)"
-                      strokeWidth="1.8"
-                      className="opacity-75 stroke-primary animate-pulse"
-                    />
-                  </g>
-                );
-              })}
-            </svg>
-
-            {/* Left Column - Extracted Schema */}
-            <div className="space-y-6 z-20">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground border-b border-border pb-2 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded bg-indigo-500" /> Extracted Fields (AI Extraction Output)
-              </h4>
-              
-              {Object.entries(getSourceCategories()).map(([category, fields]) => (
-                <div key={category} className="space-y-2">
-                  <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider block mb-1">{category} Fields</span>
-                  <div className="space-y-2">
-                    {fields.map((field) => {
-                      const isSelected = selectedSource === field.id;
-                      const isMapped = (mappings[schemaType] || []).some(m => m.sourceField === field.id);
-                      const mappingPartner = (mappings[schemaType] || []).find(m => m.sourceField === field.id)?.targetField;
-                      
-                      return (
-                        <div
-                          key={field.id}
-                          onClick={() => handleSourceClick(field.id)}
-                          className={cn(
-                            "flex items-center justify-between p-3 rounded-lg border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
-                            isSelected 
-                              ? "border-primary bg-primary/5 ring-1 ring-primary shadow-sm"
-                              : isMapped 
-                                ? "border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
-                                : "border-border/60 bg-muted/5 opacity-80"
-                          )}
-                        >
-                          <div>
-                            <p className="font-semibold text-foreground text-xs">{field.label}</p>
-                            <p className="text-[9px] text-muted-foreground mt-0.5">{field.desc} <span className="font-mono text-primary">({field.id})</span></p>
-                          </div>
-                          
-                          <div className="flex items-center gap-2">
-                            {isMapped && (
-                              <span className="text-[9px] bg-indigo-500/10 text-indigo-500 px-1.5 py-0.5 rounded font-mono border border-indigo-500/15">
-                                → {mappingPartner}
-                              </span>
-                            )}
-                            <div
-                              id={`dot-src-${field.id}`}
-                              className={cn(
-                                "w-3.5 h-3.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm",
-                                isSelected 
-                                  ? "border-primary bg-primary animate-ping"
-                                  : isMapped 
-                                    ? "border-primary bg-primary" 
-                                    : "border-muted-foreground/30 bg-background hover:border-primary"
-                              )}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Right Column - SAP Destination Schema */}
-            <div className="space-y-6 z-20">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground border-b border-border pb-2 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded bg-emerald-500" /> SAP Target Fields (OData Entity Attributes)
-              </h4>
-              
-              {Object.entries(getTargetCategories()).map(([category, fields]) => (
-                <div key={category} className="space-y-2">
-                  <span className="text-[10px] font-black uppercase text-emerald-500 tracking-wider block mb-1">{category} Fields</span>
-                  <div className="space-y-2">
-                    {fields.map((field) => {
-                      const isMapped = (mappings[schemaType] || []).some(m => m.targetField === field.id);
-                      const mappingPartner = (mappings[schemaType] || []).find(m => m.targetField === field.id)?.sourceField;
-                      
-                      return (
-                        <div
-                          key={field.id}
-                          onClick={() => handleTargetClick(field.id)}
-                          className={cn(
-                            "flex items-center justify-between p-3 rounded-lg border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
-                            isMapped 
-                              ? "border-emerald-500/50 bg-emerald-500/5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
-                              : "border-border/60 bg-muted/5 opacity-80"
-                          )}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div
-                              id={`dot-tgt-${field.id}`}
-                              className={cn(
-                                "w-3.5 h-3.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm",
-                                isMapped 
-                                  ? "border-emerald-500 bg-emerald-500" 
-                                  : "border-muted-foreground/30 bg-background hover:border-primary"
-                              )}
-                            />
-                            <div>
-                              <p className="font-semibold text-foreground text-xs">{field.label}</p>
-                              <p className="text-[9px] text-muted-foreground mt-0.5">{field.desc} <span className="font-mono text-emerald-600">({field.id})</span></p>
-                            </div>
-                          </div>
-
-                          {isMapped && (
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[9px] bg-emerald-500/10 text-emerald-600 px-1.5 py-0.5 rounded font-mono border border-emerald-500/15">
-                                ← {mappingPartner}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDisconnect(mappingPartner!, field.id);
-                                }}
-                                className="p-1 hover:bg-destructive/10 hover:text-destructive rounded transition-colors text-muted-foreground"
-                                title="Delete Connection"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* API Form Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-card w-full max-w-lg rounded-lg border border-border shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+          <div className={cn("bg-card w-full rounded-lg border border-border shadow-2xl overflow-hidden animate-in zoom-in duration-200 flex flex-col transition-all duration-300", isMappingExpanded ? "max-w-5xl" : "max-w-lg")}>
             <div className="px-6 py-4 border-b border-border bg-muted/20 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Globe className="h-5 w-5 text-primary" />
@@ -1084,7 +848,7 @@ export default function ApiConfig() {
               </button>
             </div>
 
-            <form onSubmit={handleSave} className="p-6 space-y-4">
+            <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[85vh] overflow-y-auto">
               {/* Context Name */}
               <div>
                 <label className="fiori-label text-[10px] block mb-1">API Name</label>
@@ -1109,6 +873,24 @@ export default function ApiConfig() {
                   className="w-full h-9 px-3 text-xs font-mono border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
                   required
                 />
+              </div>
+
+              {/* Context Type Selector */}
+              <div>
+                <label className="fiori-label text-[10px] block mb-1">Context Type</label>
+                <select
+                  value={formContext}
+                  onChange={(e) => {
+                    const newContext = e.target.value as "SalesOrder" | "VendorInvoice";
+                    setFormContext(newContext);
+                    setFormMappings(newContext === "SalesOrder" ? DEFAULT_SALES_ORDER_MAPPINGS : DEFAULT_VENDOR_INVOICE_MAPPINGS);
+                    setFetchedTargetFields(null);
+                  }}
+                  className="w-full h-9 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                >
+                  <option value="SalesOrder">Sales Order</option>
+                  <option value="VendorInvoice">Vendor Invoice</option>
+                </select>
               </div>
 
               {/* Authentication Type */}
@@ -1251,6 +1033,220 @@ export default function ApiConfig() {
                   </div>
                 </div>
               )}
+
+              {/* Collapsible Mapping Workspace */}
+              <div className="border border-border rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMappingExpanded(!isMappingExpanded);
+                    setTimeout(calculateLines, 100);
+                  }}
+                  className="w-full px-4 py-3 bg-muted/20 hover:bg-muted/30 transition-colors flex items-center justify-between border-b border-border/50"
+                >
+                  <div className="flex items-center gap-2">
+                    <Database className="h-4 w-4 text-primary" />
+                    <span className="text-xs font-bold text-foreground">Field Mappings (Required)</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-mono bg-primary/10 text-primary rounded-full border border-primary/20">
+                      {formMappings.length} mapped
+                    </span>
+                  </div>
+                  <span className="text-xs text-muted-foreground font-bold">
+                    {isMappingExpanded ? "Collapse ▲" : "Expand Mappings (Click to edit) ▼"}
+                  </span>
+                </button>
+                
+                {isMappingExpanded && (
+                  <div className="p-4 bg-card space-y-4 max-h-[500px] overflow-y-auto animate-in fade-in duration-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleFetchSchema}
+                          disabled={isFetchingSchema}
+                          className="px-2.5 py-1 text-[10px] font-bold bg-primary text-primary-foreground rounded hover:shadow transition-colors flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <RefreshCw className={cn("h-3 w-3", isFetchingSchema && "animate-spin")} />
+                          {isFetchingSchema ? "Fetching..." : "Fetch Fields from API"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleResetDefaults}
+                          className="px-2.5 py-1 text-[10px] font-semibold border border-border rounded hover:bg-muted transition-colors"
+                        >
+                          Reset Defaults
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleClearAll}
+                          className="px-2.5 py-1 text-[10px] font-semibold text-destructive border border-destructive/20 rounded hover:bg-destructive/5 transition-colors"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                      <span className="text-[10px] text-muted-foreground font-semibold">
+                        Select a left field then right target to connect.
+                      </span>
+                    </div>
+
+                    {/* SVG canvas and side-by-side lists */}
+                    <div ref={containerRef} className="relative grid grid-cols-1 md:grid-cols-2 gap-12 p-4 bg-muted/5 rounded-lg border border-border overflow-hidden">
+                      <svg className="absolute inset-0 pointer-events-none w-full h-full z-10">
+                        {lines.map((line) => {
+                          const dx = Math.abs(line.x2 - line.x1) * 0.45;
+                          const pathD = `M ${line.x1} ${line.y1} C ${line.x1 + dx} ${line.y1}, ${line.x2 - dx} ${line.y2}, ${line.x2} ${line.y2}`;
+                          return (
+                            <g key={line.id}>
+                              <path
+                                d={pathD}
+                                fill="none"
+                                stroke="var(--primary)"
+                                strokeWidth="3.5"
+                                className="opacity-15 stroke-primary"
+                              />
+                              <path
+                                d={pathD}
+                                fill="none"
+                                stroke="var(--primary)"
+                                strokeWidth="1.8"
+                                className="opacity-75 stroke-primary animate-pulse"
+                              />
+                            </g>
+                          );
+                        })}
+                      </svg>
+
+                      {/* Left Column - Extracted Schema */}
+                      <div className="space-y-4 z-20">
+                        <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider block mb-1">
+                          Extracted Fields (AI Output)
+                        </span>
+                        <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                          {Object.entries(getSourceCategories()).map(([category, fields]) => (
+                            <div key={category} className="space-y-1">
+                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
+                                {category} Fields
+                              </span>
+                              {fields.map((field) => {
+                                const isSelected = selectedSource === field.id;
+                                const isMapped = formMappings.some(m => m.sourceField === field.id);
+                                const mappingPartner = formMappings.find(m => m.sourceField === field.id)?.targetField;
+                                
+                                return (
+                                  <div
+                                    key={field.id}
+                                    onClick={() => handleSourceClick(field.id)}
+                                    className={cn(
+                                      "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
+                                      isSelected 
+                                        ? "border-primary bg-primary/5 ring-1 ring-primary shadow-sm"
+                                        : isMapped 
+                                          ? "border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
+                                          : "border-border/60 bg-muted/5 opacity-80"
+                                    )}
+                                  >
+                                    <div className="min-w-0 flex-1">
+                                      <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
+                                      <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                      {isMapped && (
+                                        <span className="text-[8px] bg-indigo-500/10 text-indigo-500 px-1 py-0.5 rounded font-mono border border-indigo-500/15 max-w-[80px] truncate" title={mappingPartner}>
+                                          → {mappingPartner}
+                                        </span>
+                                      )}
+                                      <div
+                                        id={`dot-src-${field.id}`}
+                                        className={cn(
+                                          "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm",
+                                          isSelected 
+                                            ? "border-primary bg-primary animate-pulse"
+                                            : isMapped 
+                                              ? "border-primary bg-primary" 
+                                              : "border-muted-foreground/30 bg-background hover:border-primary"
+                                        )}
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Right Column - Target Schema */}
+                      <div className="space-y-4 z-20">
+                        <span className="text-[10px] font-black uppercase text-emerald-600 tracking-wider block mb-1">
+                          API Destination Fields
+                        </span>
+                        <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                          {Object.entries(getTargetCategories()).map(([category, fields]) => (
+                            <div key={category} className="space-y-1">
+                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
+                                {category} Fields
+                              </span>
+                              {fields.map((field) => {
+                                const isMapped = formMappings.some(m => m.targetField === field.id);
+                                const mappingPartner = formMappings.find(m => m.targetField === field.id)?.sourceField;
+                                
+                                return (
+                                  <div
+                                    key={field.id}
+                                    onClick={() => handleTargetClick(field.id)}
+                                    className={cn(
+                                      "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
+                                      isMapped 
+                                        ? "border-emerald-500/50 bg-emerald-500/5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
+                                        : "border-border/60 bg-muted/5 opacity-80"
+                                    )}
+                                  >
+                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                      <div
+                                        id={`dot-tgt-${field.id}`}
+                                        className={cn(
+                                          "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm shrink-0",
+                                          isMapped 
+                                            ? "border-emerald-500 bg-emerald-500" 
+                                            : "border-muted-foreground/30 bg-background hover:border-primary"
+                                        )}
+                                      />
+                                      <div className="min-w-0">
+                                        <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
+                                        <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
+                                      </div>
+                                    </div>
+
+                                    {isMapped && (
+                                      <div className="flex items-center gap-1 shrink-0 ml-2">
+                                        <span className="text-[8px] bg-emerald-500/10 text-emerald-600 px-1 py-0.5 rounded font-mono border border-emerald-500/15 max-w-[80px] truncate" title={mappingPartner}>
+                                          ← {mappingPartner}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDisconnect(mappingPartner!, field.id);
+                                          }}
+                                          className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded transition-colors text-muted-foreground"
+                                          title="Delete Connection"
+                                        >
+                                          <X className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Action Buttons */}
               <div className="pt-2 border-t border-border flex justify-end gap-2">

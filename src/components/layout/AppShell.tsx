@@ -16,7 +16,7 @@ import {
   LogOut,
   Shield,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -36,7 +36,15 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(location.pathname !== "/");
+
+  useEffect(() => {
+    if (location.pathname !== "/") {
+      setCollapsed(true);
+    } else {
+      setCollapsed(false);
+    }
+  }, [location.pathname]);
 
   const user = JSON.parse(localStorage.getItem("user") || '{"name":"Admin User","role":"Administrator"}');
 

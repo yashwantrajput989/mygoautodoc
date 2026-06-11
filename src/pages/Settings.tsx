@@ -69,7 +69,7 @@ export default function SettingsPage() {
 
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto p-10">
-        <div className="max-w-4xl mx-auto">
+        <div className="w-full">
            {activeTab === "ai" && <AIPreferences />}
           {activeTab === "prompts" && <ManagePrompts />}
           {activeTab === "sources" && <ManageSources />}
