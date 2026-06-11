@@ -158,7 +158,7 @@ export default function ApiConfig() {
     setFormKeyValue("");
     setFormOauthTokenUrl("");
     setFormContext("SalesOrder");
-    setFormMappings(DEFAULT_SALES_ORDER_MAPPINGS);
+    setFormMappings([]);
     setIsMappingExpanded(false);
     setFetchedTargetFields(null);
     setIsModalOpen(true);
@@ -179,9 +179,22 @@ export default function ApiConfig() {
     
     const contextVal = (api.context || "SalesOrder") as "SalesOrder" | "VendorInvoice";
     setFormContext(contextVal);
-    setFormMappings(api.mappings || (contextVal === "VendorInvoice" ? DEFAULT_VENDOR_INVOICE_MAPPINGS : DEFAULT_SALES_ORDER_MAPPINGS));
+    
+    const savedMappings = api.mappings || [];
+    setFormMappings(savedMappings);
+    
+    if (savedMappings.length > 0) {
+      const initialFields = savedMappings.map((m: any) => ({
+        id: m.targetField,
+        label: m.targetField,
+        desc: `Mapped field: ${m.targetField}`
+      }));
+      setFetchedTargetFields(initialFields);
+    } else {
+      setFetchedTargetFields(null);
+    }
+    
     setIsMappingExpanded(false);
-    setFetchedTargetFields(null);
     setIsModalOpen(true);
   };
 
@@ -371,9 +384,18 @@ export default function ApiConfig() {
   };
 
   const handleResetDefaults = () => {
-    setFormMappings(formContext === "SalesOrder" ? DEFAULT_SALES_ORDER_MAPPINGS : DEFAULT_VENDOR_INVOICE_MAPPINGS);
+    const defaults = formContext === "SalesOrder" ? DEFAULT_SALES_ORDER_MAPPINGS : DEFAULT_VENDOR_INVOICE_MAPPINGS;
+    if (fetchedTargetFields && fetchedTargetFields.length > 0) {
+      // Only keep default mappings if the target field exists in the fetched schema
+      const validMappings = defaults.filter(d => 
+        fetchedTargetFields.some(f => f.id === d.targetField)
+      );
+      setFormMappings(validMappings);
+      toast.success(`Reset default mappings matching the fetched schema (${validMappings.length} mapped)`);
+    } else {
+      toast.warning("Please fetch API fields first before applying default mappings.");
+    }
     setSelectedSource(null);
-    toast.success(`Mappings reset to defaults`);
   };
 
   const handleClearAll = () => {
@@ -546,7 +568,7 @@ export default function ApiConfig() {
     if (fetchedTargetFields && fetchedTargetFields.length > 0) {
       return { "Fetched API Fields": fetchedTargetFields };
     }
-    return formContext === "SalesOrder" ? SALES_ORDER_TARGET : VENDOR_INVOICE_TARGET;
+    return {};
   };
 
   return (
@@ -1182,65 +1204,77 @@ export default function ApiConfig() {
                           API Destination Fields
                         </span>
                         <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
-                          {Object.entries(getTargetCategories()).map(([category, fields]) => (
-                            <div key={category} className="space-y-1">
-                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
-                                {category} Fields
-                              </span>
-                              {fields.map((field) => {
-                                const isMapped = formMappings.some(m => m.targetField === field.id);
-                                const mappingPartner = formMappings.find(m => m.targetField === field.id)?.sourceField;
-                                
-                                return (
-                                  <div
-                                    key={field.id}
-                                    onClick={() => handleTargetClick(field.id)}
-                                    className={cn(
-                                      "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
-                                      isMapped 
-                                        ? "border-emerald-500/50 bg-emerald-500/5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
-                                        : "border-border/60 bg-muted/5 opacity-80"
-                                    )}
-                                  >
-                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                      <div
-                                        id={`dot-tgt-${field.id}`}
-                                        className={cn(
-                                          "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm shrink-0",
-                                          isMapped 
-                                            ? "border-emerald-500 bg-emerald-500" 
-                                            : "border-muted-foreground/30 bg-background hover:border-primary"
-                                        )}
-                                      />
-                                      <div className="min-w-0">
-                                        <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
-                                        <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
+                          {fetchedTargetFields && fetchedTargetFields.length > 0 ? (
+                            Object.entries(getTargetCategories()).map(([category, fields]) => (
+                              <div key={category} className="space-y-1">
+                                <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
+                                  {category}
+                                </span>
+                                {fields.map((field) => {
+                                  const isMapped = formMappings.some(m => m.targetField === field.id);
+                                  const mappingPartner = formMappings.find(m => m.targetField === field.id)?.sourceField;
+                                  
+                                  return (
+                                    <div
+                                      key={field.id}
+                                      onClick={() => handleTargetClick(field.id)}
+                                      className={cn(
+                                        "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
+                                        isMapped 
+                                          ? "border-emerald-500/50 bg-emerald-500/5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
+                                          : "border-border/60 bg-muted/5 opacity-80"
+                                      )}
+                                    >
+                                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                        <div
+                                          id={`dot-tgt-${field.id}`}
+                                          className={cn(
+                                            "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm shrink-0",
+                                            isMapped 
+                                              ? "border-emerald-500 bg-emerald-500" 
+                                              : "border-muted-foreground/30 bg-background hover:border-primary"
+                                          )}
+                                        />
+                                        <div className="min-w-0">
+                                          <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
+                                          <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
+                                        </div>
                                       </div>
-                                    </div>
 
-                                    {isMapped && (
-                                      <div className="flex items-center gap-1 shrink-0 ml-2">
-                                        <span className="text-[8px] bg-emerald-500/10 text-emerald-600 px-1 py-0.5 rounded font-mono border border-emerald-500/15 max-w-[80px] truncate" title={mappingPartner}>
-                                          ← {mappingPartner}
-                                        </span>
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleDisconnect(mappingPartner!, field.id);
-                                          }}
-                                          className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded transition-colors text-muted-foreground"
-                                          title="Delete Connection"
-                                        >
-                                          <X className="h-3.5 w-3.5" />
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
+                                      {isMapped && (
+                                        <div className="flex items-center gap-1 shrink-0 ml-2">
+                                          <span className="text-[8px] bg-emerald-500/10 text-emerald-600 px-1 py-0.5 rounded font-mono border border-emerald-500/15 max-w-[80px] truncate" title={mappingPartner}>
+                                            ← {mappingPartner}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleDisconnect(mappingPartner!, field.id);
+                                            }}
+                                            className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded transition-colors text-muted-foreground"
+                                            title="Delete Connection"
+                                          >
+                                            <X className="h-3.5 w-3.5" />
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="p-8 text-center border-2 border-dashed border-border/80 rounded-lg bg-muted/10 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
+                              <Info className="h-8 w-8 text-muted-foreground/45" />
+                              <p className="text-[10px] font-bold text-muted-foreground leading-normal">
+                                No API fields loaded
+                              </p>
+                              <p className="text-[9px] text-muted-foreground/75 leading-normal max-w-[180px] mx-auto">
+                                Configure the Endpoint URL and click the <strong className="text-primary font-bold">"Fetch Fields from API"</strong> button above to load destination fields.
+                              </p>
                             </div>
-                          ))}
+                          )}
                         </div>
                       </div>
                     </div>
