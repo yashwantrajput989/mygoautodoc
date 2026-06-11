@@ -70,7 +70,10 @@ export default function ApiConfig() {
   const [apis, setApis] = useState<ApiConfigItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isAddWizardOpen, setIsAddWizardOpen] = useState(false);
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
+  const [isEditConfigModalOpen, setIsEditConfigModalOpen] = useState(false);
+  const [isEditMappingModalOpen, setIsEditMappingModalOpen] = useState(false);
   const [isTesting, setIsTesting] = useState<number | null>(null);
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({});
 
@@ -158,13 +161,37 @@ export default function ApiConfig() {
     setFormKeyValue("");
     setFormOauthTokenUrl("");
     setFormContext("SalesOrder");
-    setFormMappings([]);
-    setIsMappingExpanded(false);
+    setFormMappings(DEFAULT_SALES_ORDER_MAPPINGS);
+    setIsMappingExpanded(true);
     setFetchedTargetFields(null);
-    setIsModalOpen(true);
+    setWizardStep(1);
+    setIsAddWizardOpen(true);
   };
 
-  const handleOpenEdit = (api: ApiConfigItem) => {
+  const handleOpenEditConfig = (api: ApiConfigItem) => {
+    setEditingId(api.id);
+    setFormName(api.name);
+    setFormEndpoint(api.endpoint);
+    setFormAuthType(api.auth_type);
+    setFormClientId(api.client_id || "");
+    setFormClientSecret(api.client_secret || "");
+    setFormUsername(api.username || "");
+    setFormPassword(api.password || "");
+    setFormKeyName(api.key_name || "");
+    setFormKeyValue(api.key_value || "");
+    setFormOauthTokenUrl(api.oauth_token_url || "");
+    
+    const contextVal = (api.context || "SalesOrder") as "SalesOrder" | "VendorInvoice";
+    setFormContext(contextVal);
+    
+    const savedMappings = api.mappings || [];
+    setFormMappings(savedMappings);
+    setFetchedTargetFields(null);
+    
+    setIsEditConfigModalOpen(true);
+  };
+
+  const handleOpenEditMapping = async (api: ApiConfigItem) => {
     setEditingId(api.id);
     setFormName(api.name);
     setFormEndpoint(api.endpoint);
@@ -194,8 +221,37 @@ export default function ApiConfig() {
       setFetchedTargetFields(null);
     }
     
-    setIsMappingExpanded(false);
-    setIsModalOpen(true);
+    setIsEditMappingModalOpen(true);
+    
+    // Automatically fetch schema fields to get full list if endpoint is defined
+    if (api.endpoint) {
+      setIsFetchingSchema(true);
+      try {
+        const res = await fetch(`${API_BASE}/api-configs/fetch-schema`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            endpoint: api.endpoint,
+            auth_type: api.auth_type,
+            oauth_token_url: api.oauth_token_url,
+            client_id: api.client_id,
+            client_secret: api.client_secret,
+            username: api.username,
+            password: api.password,
+            key_name: api.key_name,
+            key_value: api.key_value
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.status === "success") {
+          setFetchedTargetFields(data.fields);
+        }
+      } catch (err) {
+        console.error("Auto fetch schema error:", err);
+      } finally {
+        setIsFetchingSchema(false);
+      }
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -213,15 +269,24 @@ export default function ApiConfig() {
     }
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleNextToStep2 = () => {
+    if (!formName.trim() || !formEndpoint.trim()) {
+      toast.error("Name and Endpoint URL are required");
+      return;
+    }
+    setWizardStep(2);
+    handleFetchSchema();
+  };
+
+  const handleSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!formName.trim() || !formEndpoint.trim()) {
       toast.error("Name and Endpoint URL are required");
       return;
     }
 
     if (!formMappings || formMappings.length === 0) {
-      toast.error("Field mappings are mandatory to save the API connection. Please expand the 'Field Mappings' section and configure them.");
+      toast.error("Field mappings are mandatory to save the API connection.");
       return;
     }
 
@@ -254,7 +319,9 @@ export default function ApiConfig() {
 
       if (res.ok) {
         toast.success(editingId ? "API updated successfully" : "API added successfully");
-        setIsModalOpen(false);
+        setIsAddWizardOpen(false);
+        setIsEditConfigModalOpen(false);
+        setIsEditMappingModalOpen(false);
         fetchApis();
       } else {
         throw new Error("Save failed");
@@ -307,7 +374,8 @@ export default function ApiConfig() {
 
   // Mappings visual updates
   const calculateLines = () => {
-    if (!containerRef.current || !isModalOpen || !isMappingExpanded) {
+    const isMapperVisible = (isAddWizardOpen && wizardStep === 2) || isEditMappingModalOpen;
+    if (!containerRef.current || !isMapperVisible) {
       setLines([]);
       return;
     }
@@ -345,7 +413,7 @@ export default function ApiConfig() {
       window.removeEventListener("resize", calculateLines);
       clearTimeout(t);
     };
-  }, [formMappings, formContext, isMappingExpanded, isModalOpen]);
+  }, [formMappings, formContext, wizardStep, isAddWizardOpen, isEditMappingModalOpen]);
 
   const handleSourceClick = (srcId: string) => {
     if (selectedSource === srcId) {
@@ -695,22 +763,29 @@ export default function ApiConfig() {
                           <button
                             onClick={() => handleTestConnection(api)}
                             disabled={isTesting === api.id}
-                            className="px-2 py-1 text-[10px] font-bold text-primary border border-primary/30 rounded hover:bg-primary/5 disabled:opacity-50 transition-colors"
+                            className="px-2 py-1 text-[10px] font-bold text-primary border border-primary/30 rounded hover:bg-primary/5 disabled:opacity-50 transition-colors mr-1"
                             title="Test Connectivity"
                           >
                             {isTesting === api.id ? "Testing..." : "Test Conn"}
                           </button>
                           <button
-                            onClick={() => handleOpenEdit(api)}
+                            onClick={() => handleOpenEditConfig(api)}
                             className="w-7 h-7 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
-                            title="Edit"
+                            title="Edit Connection Config"
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
                           <button
+                            onClick={() => handleOpenEditMapping(api)}
+                            className="w-7 h-7 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
+                            title="Edit Field Mappings"
+                          >
+                            <ArrowLeftRight className="h-3.5 w-3.5" />
+                          </button>
+                          <button
                             onClick={() => handleDelete(api.id)}
                             className="w-7 h-7 rounded border border-destructive/20 flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/5 transition-colors"
-                            title="Delete"
+                            title="Delete Connection"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -851,32 +926,646 @@ export default function ApiConfig() {
         </div>
       )}
 
-      {/* API Form Modal */}
-      {isModalOpen && (
+      {/* 1. Add Connection Wizard Modal */}
+      {isAddWizardOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className={cn("bg-card w-full rounded-lg border border-border shadow-2xl overflow-hidden animate-in zoom-in duration-200 flex flex-col transition-all duration-300", isMappingExpanded ? "max-w-5xl" : "max-w-lg")}>
+          <div className={cn(
+            "bg-card rounded-lg border border-border shadow-2xl overflow-hidden animate-in zoom-in duration-200 flex flex-col transition-all duration-300",
+            wizardStep === 2 ? "w-full max-w-5xl max-h-[90vh]" : "w-full max-w-lg"
+          )}>
+            {/* Header with Progress Tracker */}
             <div className="px-6 py-4 border-b border-border bg-muted/20 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Globe className="h-5 w-5 text-primary" />
+                <Globe className="h-5 w-5 text-primary animate-pulse" />
                 <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
-                  {editingId ? "Edit API Connection" : "Add API Connection"}
+                  New API Connection Setup
                 </h2>
               </div>
               <button
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => setIsAddWizardOpen(false)}
                 className="text-muted-foreground hover:text-foreground transition-colors p-1"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[85vh] overflow-y-auto">
+            {/* Stepper progress indicator */}
+            <div className="px-6 pt-5 pb-3 border-b border-border bg-muted/10">
+              <div className="flex items-center justify-between max-w-md mx-auto relative">
+                {/* Connecting Lines */}
+                <div className="absolute left-6 right-6 top-[14px] h-0.5 bg-border -z-10" />
+                <div 
+                  className="absolute left-6 top-[14px] h-0.5 bg-primary transition-all duration-300 -z-10"
+                  style={{ width: wizardStep === 1 ? '0%' : wizardStep === 2 ? '50%' : '100%' }}
+                />
+
+                {/* Step 1 */}
+                <div className="flex flex-col items-center gap-1 bg-card px-2">
+                  <div className={cn(
+                    "w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all",
+                    wizardStep > 1 
+                      ? "bg-primary border-primary text-primary-foreground" 
+                      : "border-primary bg-primary/10 text-primary"
+                  )}>
+                    1
+                  </div>
+                  <span className="text-[9px] font-bold uppercase text-foreground">Configure</span>
+                </div>
+
+                {/* Step 2 */}
+                <div className="flex flex-col items-center gap-1 bg-card px-2">
+                  <div className={cn(
+                    "w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all",
+                    wizardStep > 2 
+                      ? "bg-primary border-primary text-primary-foreground" 
+                      : wizardStep === 2 
+                        ? "border-primary bg-primary/10 text-primary" 
+                        : "border-border bg-card text-muted-foreground"
+                  )}>
+                    2
+                  </div>
+                  <span className="text-[9px] font-bold uppercase text-foreground">Map Fields</span>
+                </div>
+
+                {/* Step 3 */}
+                <div className="flex flex-col items-center gap-1 bg-card px-2">
+                  <div className={cn(
+                    "w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all",
+                    wizardStep === 3 
+                      ? "border-primary bg-primary/10 text-primary" 
+                      : "border-border bg-card text-muted-foreground"
+                  )}>
+                    3
+                  </div>
+                  <span className="text-[9px] font-bold uppercase text-foreground">Review & Test</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Step Contents */}
+            <div className="p-6 overflow-y-auto flex-1 max-h-[70vh]">
+              {wizardStep === 1 && (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  {/* Context Name */}
+                  <div>
+                    <label className="fiori-label text-[10px] block mb-1">API Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. SAP Gateway ERP, HubSpot Hub"
+                      value={formName}
+                      onChange={(e) => setFormName(e.target.value)}
+                      className="w-full h-9 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                      required
+                    />
+                  </div>
+
+                  {/* Endpoint URL */}
+                  <div>
+                    <label className="fiori-label text-[10px] block mb-1">Endpoint URL</label>
+                    <input
+                      type="url"
+                      placeholder="https://api.yourdomain.com/v1"
+                      value={formEndpoint}
+                      onChange={(e) => setFormEndpoint(e.target.value)}
+                      className="w-full h-9 px-3 text-xs font-mono border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                      required
+                    />
+                  </div>
+
+                  {/* Context Type Selector */}
+                  <div>
+                    <label className="fiori-label text-[10px] block mb-1">Context Type</label>
+                    <select
+                      value={formContext}
+                      onChange={(e) => {
+                        const newContext = e.target.value as "SalesOrder" | "VendorInvoice";
+                        setFormContext(newContext);
+                        setFormMappings(newContext === "SalesOrder" ? DEFAULT_SALES_ORDER_MAPPINGS : DEFAULT_VENDOR_INVOICE_MAPPINGS);
+                        setFetchedTargetFields(null);
+                      }}
+                      className="w-full h-9 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                    >
+                      <option value="SalesOrder">Sales Order</option>
+                      <option value="VendorInvoice">Vendor Invoice</option>
+                    </select>
+                  </div>
+
+                  {/* Authentication Type */}
+                  <div>
+                    <label className="fiori-label text-[10px] block mb-1">Authorization Protocol</label>
+                    <select
+                      value={formAuthType}
+                      onChange={(e) => setFormAuthType(e.target.value)}
+                      className="w-full h-9 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                    >
+                      <option value="None">None (Public Access)</option>
+                      <option value="API Key">API Key (Header / Query)</option>
+                      <option value="Basic Auth">Basic Authentication (Username/Pass)</option>
+                      <option value="OAuth2">OAuth 2.0 (Client Credentials)</option>
+                    </select>
+                  </div>
+
+                  {/* Credentials fields */}
+                  {formAuthType === "API Key" && (
+                    <div className="grid grid-cols-2 gap-4 p-4 bg-muted/10 border border-border/60 rounded animate-in slide-in-from-top-1 duration-200">
+                      <div>
+                        <label className="fiori-label text-[10px] block mb-1">Key Field Name</label>
+                        <div className="relative">
+                          <Key className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                          <input
+                            type="text"
+                            placeholder="X-API-Key"
+                            value={formKeyName}
+                            onChange={(e) => setFormKeyName(e.target.value)}
+                            className="w-full h-8 pl-8 pr-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="fiori-label text-[10px] block mb-1">Key Secret Value</label>
+                        <div className="relative">
+                          <Lock className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                          <input
+                            type={showSecret["key"] ? "text" : "password"}
+                            placeholder="Enter key secret..."
+                            value={formKeyValue}
+                            onChange={(e) => setFormKeyValue(e.target.value)}
+                            className="w-full h-8 pl-8 pr-8 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => toggleShowSecret("key")}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showSecret["key"] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {formAuthType === "Basic Auth" && (
+                    <div className="grid grid-cols-2 gap-4 p-4 bg-muted/10 border border-border/60 rounded animate-in slide-in-from-top-1 duration-200">
+                      <div>
+                        <label className="fiori-label text-[10px] block mb-1">Username</label>
+                        <div className="relative">
+                          <UserIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                          <input
+                            type="text"
+                            placeholder="Admin"
+                            value={formUsername}
+                            onChange={(e) => setFormUsername(e.target.value)}
+                            className="w-full h-8 pl-8 pr-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="fiori-label text-[10px] block mb-1">Password</label>
+                        <div className="relative">
+                          <Lock className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                          <input
+                            type={showSecret["pass"] ? "text" : "password"}
+                            placeholder="Enter password..."
+                            value={formPassword}
+                            onChange={(e) => setFormPassword(e.target.value)}
+                            className="w-full h-8 pl-8 pr-8 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => toggleShowSecret("pass")}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showSecret["pass"] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {formAuthType === "OAuth2" && (
+                    <div className="p-4 bg-muted/10 border border-border/60 rounded space-y-3 animate-in slide-in-from-top-1 duration-200">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="fiori-label text-[10px] block mb-1">Client ID</label>
+                          <input
+                            type="text"
+                            placeholder="Enter client ID"
+                            value={formClientId}
+                            onChange={(e) => setFormClientId(e.target.value)}
+                            className="w-full h-8 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="fiori-label text-[10px] block mb-1">Client Secret</label>
+                          <div className="relative">
+                            <input
+                              type={showSecret["oauth"] ? "text" : "password"}
+                              placeholder="Enter client secret"
+                              value={formClientSecret}
+                              onChange={(e) => setFormClientSecret(e.target.value)}
+                              className="w-full h-8 pl-3 pr-8 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => toggleShowSecret("oauth")}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            >
+                              {showSecret["oauth"] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="fiori-label text-[10px] block mb-1">OAuth Token Endpoint URL</label>
+                        <input
+                          type="url"
+                          placeholder="https://login.microsoftonline.com/common/oauth2/v2.0/token"
+                          value={formOauthTokenUrl}
+                          onChange={(e) => setFormOauthTokenUrl(e.target.value)}
+                          className="w-full h-8 px-3 text-xs font-mono border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
+                          required={formAuthType === "OAuth2"}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {wizardStep === 2 && (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleFetchSchema}
+                        disabled={isFetchingSchema}
+                        className="px-2.5 py-1 text-[10px] font-bold bg-primary text-primary-foreground rounded hover:shadow transition-colors flex items-center gap-1 disabled:opacity-50"
+                      >
+                        <RefreshCw className={cn("h-3 w-3", isFetchingSchema && "animate-spin")} />
+                        {isFetchingSchema ? "Fetching..." : "Fetch Fields from API"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResetDefaults}
+                        className="px-2.5 py-1 text-[10px] font-semibold border border-border rounded hover:bg-muted transition-colors"
+                      >
+                        Reset Defaults
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleClearAll}
+                        className="px-2.5 py-1 text-[10px] font-semibold text-destructive border border-destructive/20 rounded hover:bg-destructive/5 transition-colors"
+                      >
+                        Clear All
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground font-semibold">
+                      Select a left field then right target to connect.
+                    </span>
+                  </div>
+
+                  {/* SVG canvas and side-by-side lists */}
+                  <div ref={containerRef} className="relative grid grid-cols-1 md:grid-cols-2 gap-12 p-4 bg-muted/5 rounded-lg border border-border overflow-hidden min-h-[350px]">
+                    <svg className="absolute inset-0 pointer-events-none w-full h-full z-10">
+                      {lines.map((line) => {
+                        const dx = Math.abs(line.x2 - line.x1) * 0.45;
+                        const pathD = `M ${line.x1} ${line.y1} C ${line.x1 + dx} ${line.y1}, ${line.x2 - dx} ${line.y2}, ${line.x2} ${line.y2}`;
+                        return (
+                          <g key={line.id}>
+                            <path
+                              d={pathD}
+                              fill="none"
+                              stroke="var(--primary)"
+                              strokeWidth="3.5"
+                              className="opacity-15 stroke-primary"
+                            />
+                            <path
+                              d={pathD}
+                              fill="none"
+                              stroke="var(--primary)"
+                              strokeWidth="1.8"
+                              className="opacity-75 stroke-primary animate-pulse"
+                            />
+                          </g>
+                        );
+                      })}
+                    </svg>
+
+                    {/* Left Column - Extracted Schema */}
+                    <div className="space-y-4 z-20">
+                      <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider block mb-1">
+                        Extracted Fields (AI Output)
+                      </span>
+                      <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                        {Object.entries(getSourceCategories()).map(([category, fields]) => (
+                          <div key={category} className="space-y-1">
+                            <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
+                              {category} Fields
+                            </span>
+                            {fields.map((field) => {
+                              const isSelected = selectedSource === field.id;
+                              const isMapped = formMappings.some(m => m.sourceField === field.id);
+                              const mappingPartner = formMappings.find(m => m.sourceField === field.id)?.targetField;
+                              
+                              return (
+                                <div
+                                  key={field.id}
+                                  onClick={() => handleSourceClick(field.id)}
+                                  className={cn(
+                                    "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
+                                    isSelected 
+                                      ? "border-primary bg-primary/5 ring-1 ring-primary shadow-sm"
+                                      : isMapped 
+                                        ? "border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
+                                        : "border-border/60 bg-muted/5 opacity-80"
+                                  )}
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
+                                    <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
+                                  </div>
+                                  
+                                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                    {isMapped && (
+                                      <span className="text-[8px] bg-indigo-500/10 text-indigo-500 px-1 py-0.5 rounded font-mono border border-indigo-500/15 max-w-[80px] truncate" title={mappingPartner}>
+                                        → {mappingPartner}
+                                      </span>
+                                    )}
+                                    <div
+                                      id={`dot-src-${field.id}`}
+                                      className={cn(
+                                        "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm",
+                                        isSelected 
+                                          ? "border-primary bg-primary animate-pulse"
+                                          : isMapped 
+                                            ? "border-primary bg-primary" 
+                                            : "border-muted-foreground/30 bg-background hover:border-primary"
+                                      )}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Right Column - Target Schema */}
+                    <div className="space-y-4 z-20">
+                      <span className="text-[10px] font-black uppercase text-emerald-600 tracking-wider block mb-1">
+                        API Destination Fields
+                      </span>
+                      <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                        {fetchedTargetFields && fetchedTargetFields.length > 0 ? (
+                          Object.entries(getTargetCategories()).map(([category, fields]) => (
+                            <div key={category} className="space-y-1">
+                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
+                                {category}
+                              </span>
+                              {fields.map((field) => {
+                                const isMapped = formMappings.some(m => m.targetField === field.id);
+                                const mappingPartner = formMappings.find(m => m.targetField === field.id)?.sourceField;
+                                
+                                return (
+                                  <div
+                                    key={field.id}
+                                    onClick={() => handleTargetClick(field.id)}
+                                    className={cn(
+                                      "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
+                                      isMapped 
+                                        ? "border-emerald-500/50 bg-emerald-500/5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
+                                        : "border-border/60 bg-muted/5 opacity-80"
+                                    )}
+                                  >
+                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                      <div
+                                        id={`dot-tgt-${field.id}`}
+                                        className={cn(
+                                          "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm shrink-0",
+                                          isMapped 
+                                            ? "border-emerald-500 bg-emerald-500" 
+                                            : "border-muted-foreground/30 bg-background hover:border-primary"
+                                        )}
+                                      />
+                                      <div className="min-w-0">
+                                        <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
+                                        <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
+                                      </div>
+                                    </div>
+
+                                    {isMapped && (
+                                      <div className="flex items-center gap-1 shrink-0 ml-2">
+                                        <span className="text-[8px] bg-emerald-500/10 text-emerald-600 px-1 py-0.5 rounded font-mono border border-emerald-500/15 max-w-[80px] truncate" title={mappingPartner}>
+                                          ← {mappingPartner}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDisconnect(mappingPartner!, field.id);
+                                          }}
+                                          className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded transition-colors text-muted-foreground"
+                                          title="Delete Connection"
+                                        >
+                                          <X className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="p-8 text-center border-2 border-dashed border-border/80 rounded-lg bg-muted/10 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
+                            <Info className="h-8 w-8 text-muted-foreground/45" />
+                            <p className="text-[10px] font-bold text-muted-foreground leading-normal">
+                              No API fields loaded
+                            </p>
+                            <p className="text-[9px] text-muted-foreground/75 leading-normal max-w-[180px] mx-auto">
+                              Configure the Endpoint URL and click the <strong className="text-primary font-bold">"Fetch Fields from API"</strong> button above to load destination fields.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {wizardStep === 3 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div className="p-4 bg-muted/20 border border-border rounded-lg space-y-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-primary border-b border-border pb-1.5">
+                      Connection Configuration Details
+                    </h3>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                      <div>
+                        <span className="text-muted-foreground font-semibold">API Name:</span>
+                        <p className="font-bold text-foreground mt-0.5">{formName}</p>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground font-semibold">Context Type:</span>
+                        <p className="font-bold text-foreground mt-0.5">{formContext}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <span className="text-muted-foreground font-semibold">Endpoint URL:</span>
+                        <p className="font-mono text-foreground mt-0.5 break-all">{formEndpoint}</p>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground font-semibold">Auth Type:</span>
+                        <p className="font-bold text-foreground mt-0.5">{formAuthType}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-muted/20 border border-border rounded-lg space-y-3">
+                    <div className="flex items-center justify-between border-b border-border pb-1.5">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-primary">
+                        Mapped Fields Summary
+                      </h3>
+                      <span className="px-2 py-0.5 text-[10px] font-bold bg-primary/10 text-primary border border-primary/20 rounded-full font-mono">
+                        {formMappings.length} Mapped
+                      </span>
+                    </div>
+
+                    {formMappings.length > 0 ? (
+                      <div className="max-h-[160px] overflow-y-auto space-y-1.5 pr-1 font-mono text-[10px]">
+                        {formMappings.map((mapping, index) => (
+                          <div key={index} className="flex items-center justify-between p-1.5 bg-card border border-border rounded hover:bg-muted/10">
+                            <span className="text-indigo-500 font-bold">{mapping.sourceField}</span>
+                            <span className="text-muted-foreground font-bold">→</span>
+                            <span className="text-emerald-600 font-bold">{mapping.targetField}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground italic text-center py-4">
+                        No field mappings created. Go back to Map Fields to add mappings.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="p-4 bg-primary/5 border border-primary/15 rounded-lg flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-bold text-foreground">Verify Connection Integrity</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        Test endpoint connectivity to ensure auth credentials and URLs are configured correctly before saving.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleTestConnection({
+                        id: -1,
+                        name: formName,
+                        endpoint: formEndpoint,
+                        auth_type: formAuthType,
+                        client_id: formClientId,
+                        client_secret: formClientSecret,
+                        username: formUsername,
+                        password: formPassword,
+                        key_name: formKeyName,
+                        key_value: formKeyValue,
+                        oauth_token_url: formOauthTokenUrl,
+                        status: 'Active',
+                        created_at: ''
+                      })}
+                      disabled={isTesting === -1}
+                      className="px-3 py-1.5 text-xs font-bold text-primary border border-primary/30 rounded hover:bg-primary/5 shrink-0 transition-all active:scale-95"
+                    >
+                      {isTesting === -1 ? "Testing..." : "Test Connection"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer Navigation Buttons */}
+            <div className="px-6 py-4 border-t border-border bg-muted/20 flex justify-between gap-2">
+              {wizardStep === 1 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddWizardOpen(false)}
+                    className="px-4 py-1.5 text-xs font-semibold border border-border rounded bg-card hover:bg-muted transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNextToStep2}
+                    className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow transition-all active:scale-95"
+                  >
+                    Next: Map Fields
+                  </button>
+                </>
+              ) : wizardStep === 2 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(1)}
+                    className="px-4 py-1.5 text-xs font-semibold border border-border rounded bg-card hover:bg-muted transition-colors"
+                  >
+                    Back: Config Details
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(3)}
+                    className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow transition-all active:scale-95"
+                  >
+                    Next: Review & Test
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(2)}
+                    className="px-4 py-1.5 text-xs font-semibold border border-border rounded bg-card hover:bg-muted transition-colors"
+                  >
+                    Back: Field Mappings
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSave()}
+                    className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow transition-all active:scale-95"
+                  >
+                    Save Connection
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Edit Connection Config Modal */}
+      {isEditConfigModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-card w-full max-w-lg rounded-lg border border-border shadow-2xl overflow-hidden animate-in zoom-in duration-200 flex flex-col">
+            <div className="px-6 py-4 border-b border-border bg-muted/20 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Globe className="h-5 w-5 text-primary" />
+                <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
+                  Edit Connection Config
+                </h2>
+              </div>
+              <button
+                onClick={() => setIsEditConfigModalOpen(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
               {/* Context Name */}
               <div>
                 <label className="fiori-label text-[10px] block mb-1">API Name</label>
                 <input
                   type="text"
-                  placeholder="e.g. SAP Gateway ERP, HubSpot Hub"
+                  placeholder="e.g. SAP Gateway ERP"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   className="w-full h-9 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
@@ -897,24 +1586,6 @@ export default function ApiConfig() {
                 />
               </div>
 
-              {/* Context Type Selector */}
-              <div>
-                <label className="fiori-label text-[10px] block mb-1">Context Type</label>
-                <select
-                  value={formContext}
-                  onChange={(e) => {
-                    const newContext = e.target.value as "SalesOrder" | "VendorInvoice";
-                    setFormContext(newContext);
-                    setFormMappings(newContext === "SalesOrder" ? DEFAULT_SALES_ORDER_MAPPINGS : DEFAULT_VENDOR_INVOICE_MAPPINGS);
-                    setFetchedTargetFields(null);
-                  }}
-                  className="w-full h-9 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
-                >
-                  <option value="SalesOrder">Sales Order</option>
-                  <option value="VendorInvoice">Vendor Invoice</option>
-                </select>
-              </div>
-
               {/* Authentication Type */}
               <div>
                 <label className="fiori-label text-[10px] block mb-1">Authorization Protocol</label>
@@ -930,7 +1601,7 @@ export default function ApiConfig() {
                 </select>
               </div>
 
-              {/* API Key Form Fields */}
+              {/* Credentials Fields */}
               {formAuthType === "API Key" && (
                 <div className="grid grid-cols-2 gap-4 p-4 bg-muted/10 border border-border/60 rounded animate-in slide-in-from-top-1 duration-200">
                   <div>
@@ -939,7 +1610,7 @@ export default function ApiConfig() {
                       <Key className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                       <input
                         type="text"
-                        placeholder="X-API-Key / Authorization"
+                        placeholder="X-API-Key"
                         value={formKeyName}
                         onChange={(e) => setFormKeyName(e.target.value)}
                         className="w-full h-8 pl-8 pr-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
@@ -952,7 +1623,7 @@ export default function ApiConfig() {
                       <Lock className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                       <input
                         type={showSecret["key"] ? "text" : "password"}
-                        placeholder="Enter key secret..."
+                        placeholder="********"
                         value={formKeyValue}
                         onChange={(e) => setFormKeyValue(e.target.value)}
                         className="w-full h-8 pl-8 pr-8 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
@@ -969,7 +1640,6 @@ export default function ApiConfig() {
                 </div>
               )}
 
-              {/* Basic Auth Form Fields */}
               {formAuthType === "Basic Auth" && (
                 <div className="grid grid-cols-2 gap-4 p-4 bg-muted/10 border border-border/60 rounded animate-in slide-in-from-top-1 duration-200">
                   <div>
@@ -991,7 +1661,7 @@ export default function ApiConfig() {
                       <Lock className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                       <input
                         type={showSecret["pass"] ? "text" : "password"}
-                        placeholder="Enter password..."
+                        placeholder="********"
                         value={formPassword}
                         onChange={(e) => setFormPassword(e.target.value)}
                         className="w-full h-8 pl-8 pr-8 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
@@ -1008,7 +1678,6 @@ export default function ApiConfig() {
                 </div>
               )}
 
-              {/* OAuth2 Form Fields */}
               {formAuthType === "OAuth2" && (
                 <div className="p-4 bg-muted/10 border border-border/60 rounded space-y-3 animate-in slide-in-from-top-1 duration-200">
                   <div className="grid grid-cols-2 gap-4">
@@ -1027,7 +1696,7 @@ export default function ApiConfig() {
                       <div className="relative">
                         <input
                           type={showSecret["oauth"] ? "text" : "password"}
-                          placeholder="Enter client secret"
+                          placeholder="********"
                           value={formClientSecret}
                           onChange={(e) => setFormClientSecret(e.target.value)}
                           className="w-full h-8 pl-3 pr-8 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
@@ -1043,7 +1712,7 @@ export default function ApiConfig() {
                     </div>
                   </div>
                   <div className="space-y-1">
-                     <label className="fiori-label text-[10px] block mb-1">OAuth Token Endpoint URL</label>
+                    <label className="fiori-label text-[10px] block mb-1">OAuth Token Endpoint URL</label>
                     <input
                       type="url"
                       placeholder="https://login.microsoftonline.com/common/oauth2/v2.0/token"
@@ -1056,238 +1725,12 @@ export default function ApiConfig() {
                 </div>
               )}
 
-              {/* Collapsible Mapping Workspace */}
-              <div className="border border-border rounded-lg overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsMappingExpanded(!isMappingExpanded);
-                    setTimeout(calculateLines, 100);
-                  }}
-                  className="w-full px-4 py-3 bg-muted/20 hover:bg-muted/30 transition-colors flex items-center justify-between border-b border-border/50"
-                >
-                  <div className="flex items-center gap-2">
-                    <Database className="h-4 w-4 text-primary" />
-                    <span className="text-xs font-bold text-foreground">Field Mappings (Required)</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono bg-primary/10 text-primary rounded-full border border-primary/20">
-                      {formMappings.length} mapped
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground font-bold">
-                    {isMappingExpanded ? "Collapse ▲" : "Expand Mappings (Click to edit) ▼"}
-                  </span>
-                </button>
-                
-                {isMappingExpanded && (
-                  <div className="p-4 bg-card space-y-4 max-h-[500px] overflow-y-auto animate-in fade-in duration-200">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handleFetchSchema}
-                          disabled={isFetchingSchema}
-                          className="px-2.5 py-1 text-[10px] font-bold bg-primary text-primary-foreground rounded hover:shadow transition-colors flex items-center gap-1 disabled:opacity-50"
-                        >
-                          <RefreshCw className={cn("h-3 w-3", isFetchingSchema && "animate-spin")} />
-                          {isFetchingSchema ? "Fetching..." : "Fetch Fields from API"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleResetDefaults}
-                          className="px-2.5 py-1 text-[10px] font-semibold border border-border rounded hover:bg-muted transition-colors"
-                        >
-                          Reset Defaults
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleClearAll}
-                          className="px-2.5 py-1 text-[10px] font-semibold text-destructive border border-destructive/20 rounded hover:bg-destructive/5 transition-colors"
-                        >
-                          Clear All
-                        </button>
-                      </div>
-                      <span className="text-[10px] text-muted-foreground font-semibold">
-                        Select a left field then right target to connect.
-                      </span>
-                    </div>
-
-                    {/* SVG canvas and side-by-side lists */}
-                    <div ref={containerRef} className="relative grid grid-cols-1 md:grid-cols-2 gap-12 p-4 bg-muted/5 rounded-lg border border-border overflow-hidden">
-                      <svg className="absolute inset-0 pointer-events-none w-full h-full z-10">
-                        {lines.map((line) => {
-                          const dx = Math.abs(line.x2 - line.x1) * 0.45;
-                          const pathD = `M ${line.x1} ${line.y1} C ${line.x1 + dx} ${line.y1}, ${line.x2 - dx} ${line.y2}, ${line.x2} ${line.y2}`;
-                          return (
-                            <g key={line.id}>
-                              <path
-                                d={pathD}
-                                fill="none"
-                                stroke="var(--primary)"
-                                strokeWidth="3.5"
-                                className="opacity-15 stroke-primary"
-                              />
-                              <path
-                                d={pathD}
-                                fill="none"
-                                stroke="var(--primary)"
-                                strokeWidth="1.8"
-                                className="opacity-75 stroke-primary animate-pulse"
-                              />
-                            </g>
-                          );
-                        })}
-                      </svg>
-
-                      {/* Left Column - Extracted Schema */}
-                      <div className="space-y-4 z-20">
-                        <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider block mb-1">
-                          Extracted Fields (AI Output)
-                        </span>
-                        <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
-                          {Object.entries(getSourceCategories()).map(([category, fields]) => (
-                            <div key={category} className="space-y-1">
-                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
-                                {category} Fields
-                              </span>
-                              {fields.map((field) => {
-                                const isSelected = selectedSource === field.id;
-                                const isMapped = formMappings.some(m => m.sourceField === field.id);
-                                const mappingPartner = formMappings.find(m => m.sourceField === field.id)?.targetField;
-                                
-                                return (
-                                  <div
-                                    key={field.id}
-                                    onClick={() => handleSourceClick(field.id)}
-                                    className={cn(
-                                      "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
-                                      isSelected 
-                                        ? "border-primary bg-primary/5 ring-1 ring-primary shadow-sm"
-                                        : isMapped 
-                                          ? "border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
-                                          : "border-border/60 bg-muted/5 opacity-80"
-                                    )}
-                                  >
-                                    <div className="min-w-0 flex-1">
-                                      <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
-                                      <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
-                                    </div>
-                                    
-                                    <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                                      {isMapped && (
-                                        <span className="text-[8px] bg-indigo-500/10 text-indigo-500 px-1 py-0.5 rounded font-mono border border-indigo-500/15 max-w-[80px] truncate" title={mappingPartner}>
-                                          → {mappingPartner}
-                                        </span>
-                                      )}
-                                      <div
-                                        id={`dot-src-${field.id}`}
-                                        className={cn(
-                                          "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm",
-                                          isSelected 
-                                            ? "border-primary bg-primary animate-pulse"
-                                            : isMapped 
-                                              ? "border-primary bg-primary" 
-                                              : "border-muted-foreground/30 bg-background hover:border-primary"
-                                        )}
-                                      />
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Right Column - Target Schema */}
-                      <div className="space-y-4 z-20">
-                        <span className="text-[10px] font-black uppercase text-emerald-600 tracking-wider block mb-1">
-                          API Destination Fields
-                        </span>
-                        <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
-                          {fetchedTargetFields && fetchedTargetFields.length > 0 ? (
-                            Object.entries(getTargetCategories()).map(([category, fields]) => (
-                              <div key={category} className="space-y-1">
-                                <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
-                                  {category}
-                                </span>
-                                {fields.map((field) => {
-                                  const isMapped = formMappings.some(m => m.targetField === field.id);
-                                  const mappingPartner = formMappings.find(m => m.targetField === field.id)?.sourceField;
-                                  
-                                  return (
-                                    <div
-                                      key={field.id}
-                                      onClick={() => handleTargetClick(field.id)}
-                                      className={cn(
-                                        "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
-                                        isMapped 
-                                          ? "border-emerald-500/50 bg-emerald-500/5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
-                                          : "border-border/60 bg-muted/5 opacity-80"
-                                      )}
-                                    >
-                                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                        <div
-                                          id={`dot-tgt-${field.id}`}
-                                          className={cn(
-                                            "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm shrink-0",
-                                            isMapped 
-                                              ? "border-emerald-500 bg-emerald-500" 
-                                              : "border-muted-foreground/30 bg-background hover:border-primary"
-                                          )}
-                                        />
-                                        <div className="min-w-0">
-                                          <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
-                                          <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
-                                        </div>
-                                      </div>
-
-                                      {isMapped && (
-                                        <div className="flex items-center gap-1 shrink-0 ml-2">
-                                          <span className="text-[8px] bg-emerald-500/10 text-emerald-600 px-1 py-0.5 rounded font-mono border border-emerald-500/15 max-w-[80px] truncate" title={mappingPartner}>
-                                            ← {mappingPartner}
-                                          </span>
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              handleDisconnect(mappingPartner!, field.id);
-                                            }}
-                                            className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded transition-colors text-muted-foreground"
-                                            title="Delete Connection"
-                                          >
-                                            <X className="h-3.5 w-3.5" />
-                                          </button>
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            ))
-                          ) : (
-                            <div className="p-8 text-center border-2 border-dashed border-border/80 rounded-lg bg-muted/10 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
-                              <Info className="h-8 w-8 text-muted-foreground/45" />
-                              <p className="text-[10px] font-bold text-muted-foreground leading-normal">
-                                No API fields loaded
-                              </p>
-                              <p className="text-[9px] text-muted-foreground/75 leading-normal max-w-[180px] mx-auto">
-                                Configure the Endpoint URL and click the <strong className="text-primary font-bold">"Fetch Fields from API"</strong> button above to load destination fields.
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
               {/* Action Buttons */}
-              <div className="pt-2 border-t border-border flex justify-end gap-2">
+              <div className="pt-4 border-t border-border flex justify-end gap-2 bg-card">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-3.5 py-1.5 text-xs font-semibold border border-border rounded hover:bg-muted transition-colors"
+                  onClick={() => setIsEditConfigModalOpen(false)}
+                  className="px-4 py-1.5 text-xs font-semibold border border-border rounded bg-card hover:bg-muted transition-colors"
                 >
                   Cancel
                 </button>
@@ -1295,10 +1738,251 @@ export default function ApiConfig() {
                   type="submit"
                   className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow transition-all active:scale-95"
                 >
-                  {editingId ? "Save Changes" : "Save Connection"}
+                  Save Configuration
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Edit Field Mappings Modal */}
+      {isEditMappingModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-card w-full max-w-5xl max-h-[90vh] rounded-lg border border-border shadow-2xl overflow-hidden animate-in zoom-in duration-200 flex flex-col">
+            <div className="px-6 py-4 border-b border-border bg-muted/20 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ArrowLeftRight className="h-5 w-5 text-primary" />
+                <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
+                  Edit Field Mappings: {formName}
+                </h2>
+              </div>
+              <button
+                onClick={() => setIsEditMappingModalOpen(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleFetchSchema}
+                    disabled={isFetchingSchema}
+                    className="px-2.5 py-1 text-[10px] font-bold bg-primary text-primary-foreground rounded hover:shadow transition-colors flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <RefreshCw className={cn("h-3 w-3", isFetchingSchema && "animate-spin")} />
+                    {isFetchingSchema ? "Fetching..." : "Fetch Fields from API"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetDefaults}
+                    className="px-2.5 py-1 text-[10px] font-semibold border border-border rounded hover:bg-muted transition-colors"
+                  >
+                    Reset Defaults
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearAll}
+                    className="px-2.5 py-1 text-[10px] font-semibold text-destructive border border-destructive/20 rounded hover:bg-destructive/5 transition-colors"
+                  >
+                    Clear All
+                  </button>
+                </div>
+                <span className="text-[10px] text-muted-foreground font-semibold">
+                  Select a left field then right target to connect. Mapped fields: {formMappings.length}
+                </span>
+              </div>
+
+              {/* SVG canvas and side-by-side lists */}
+              <div ref={containerRef} className="relative grid grid-cols-1 md:grid-cols-2 gap-12 p-4 bg-muted/5 rounded-lg border border-border overflow-hidden min-h-[380px]">
+                <svg className="absolute inset-0 pointer-events-none w-full h-full z-10">
+                  {lines.map((line) => {
+                    const dx = Math.abs(line.x2 - line.x1) * 0.45;
+                    const pathD = `M ${line.x1} ${line.y1} C ${line.x1 + dx} ${line.y1}, ${line.x2 - dx} ${line.y2}, ${line.x2} ${line.y2}`;
+                    return (
+                      <g key={line.id}>
+                        <path
+                          d={pathD}
+                          fill="none"
+                          stroke="var(--primary)"
+                          strokeWidth="3.5"
+                          className="opacity-15 stroke-primary"
+                        />
+                        <path
+                          d={pathD}
+                          fill="none"
+                          stroke="var(--primary)"
+                          strokeWidth="1.8"
+                          className="opacity-75 stroke-primary animate-pulse"
+                        />
+                      </g>
+                    );
+                  })}
+                </svg>
+
+                {/* Left Column - Extracted Schema */}
+                <div className="space-y-4 z-20">
+                  <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider block mb-1">
+                    Extracted Fields (AI Output)
+                  </span>
+                  <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                    {Object.entries(getSourceCategories()).map(([category, fields]) => (
+                      <div key={category} className="space-y-1">
+                        <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
+                          {category} Fields
+                        </span>
+                        {fields.map((field) => {
+                          const isSelected = selectedSource === field.id;
+                          const isMapped = formMappings.some(m => m.sourceField === field.id);
+                          const mappingPartner = formMappings.find(m => m.sourceField === field.id)?.targetField;
+                          
+                          return (
+                            <div
+                              key={field.id}
+                              onClick={() => handleSourceClick(field.id)}
+                              className={cn(
+                                "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
+                                isSelected 
+                                  ? "border-primary bg-primary/5 ring-1 ring-primary shadow-sm"
+                                  : isMapped 
+                                    ? "border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
+                                    : "border-border/60 bg-muted/5 opacity-80"
+                              )}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
+                                <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
+                              </div>
+                              
+                              <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                {isMapped && (
+                                  <span className="text-[8px] bg-indigo-500/10 text-indigo-500 px-1 py-0.5 rounded font-mono border border-indigo-500/15 max-w-[80px] truncate" title={mappingPartner}>
+                                    → {mappingPartner}
+                                  </span>
+                                )}
+                                <div
+                                  id={`dot-src-${field.id}`}
+                                  className={cn(
+                                    "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm",
+                                    isSelected 
+                                      ? "border-primary bg-primary animate-pulse"
+                                      : isMapped 
+                                        ? "border-primary bg-primary" 
+                                        : "border-muted-foreground/30 bg-background hover:border-primary"
+                                  )}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Right Column - Target Schema */}
+                <div className="space-y-4 z-20">
+                  <span className="text-[10px] font-black uppercase text-emerald-600 tracking-wider block mb-1">
+                    API Destination Fields
+                  </span>
+                  <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                    {fetchedTargetFields && fetchedTargetFields.length > 0 ? (
+                      Object.entries(getTargetCategories()).map(([category, fields]) => (
+                        <div key={category} className="space-y-1">
+                          <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-wide block px-1 py-0.5 bg-muted/40 rounded">
+                            {category}
+                          </span>
+                          {fields.map((field) => {
+                            const isMapped = formMappings.some(m => m.targetField === field.id);
+                            const mappingPartner = formMappings.find(m => m.targetField === field.id)?.sourceField;
+                            
+                            return (
+                              <div
+                                key={field.id}
+                                onClick={() => handleTargetClick(field.id)}
+                                className={cn(
+                                  "flex items-center justify-between p-2 rounded border text-left cursor-pointer transition-all hover:bg-muted/10 relative",
+                                  isMapped 
+                                    ? "border-emerald-500/50 bg-emerald-500/5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]" 
+                                    : "border-border/60 bg-muted/5 opacity-80"
+                                )}
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                  <div
+                                    id={`dot-tgt-${field.id}`}
+                                    className={cn(
+                                      "w-2.5 h-2.5 rounded-full border-2 transition-all flex items-center justify-center relative z-30 cursor-pointer shadow-sm shrink-0",
+                                      isMapped 
+                                        ? "border-emerald-500 bg-emerald-500" 
+                                        : "border-muted-foreground/30 bg-background hover:border-primary"
+                                    )}
+                                  />
+                                  <div className="min-w-0">
+                                    <p className="font-semibold text-foreground text-[11px] truncate">{field.label}</p>
+                                    <p className="text-[9px] text-muted-foreground truncate font-mono mt-0.5">({field.id})</p>
+                                  </div>
+                                </div>
+
+                                {isMapped && (
+                                  <div className="flex items-center gap-1 shrink-0 ml-2">
+                                    <span className="text-[8px] bg-emerald-500/10 text-emerald-600 px-1 py-0.5 rounded font-mono border border-emerald-500/15 max-w-[80px] truncate" title={mappingPartner}>
+                                      ← {mappingPartner}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDisconnect(mappingPartner!, field.id);
+                                      }}
+                                      className="p-0.5 hover:bg-destructive/10 hover:text-destructive rounded transition-colors text-muted-foreground"
+                                      title="Delete Connection"
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-8 text-center border-2 border-dashed border-border/80 rounded-lg bg-muted/10 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
+                        <Info className="h-8 w-8 text-muted-foreground/45" />
+                        <p className="text-[10px] font-bold text-muted-foreground leading-normal">
+                          No API fields loaded
+                        </p>
+                        <p className="text-[9px] text-muted-foreground/75 leading-normal max-w-[180px] mx-auto">
+                          Configure the Endpoint URL and click the <strong className="text-primary font-bold">"Fetch Fields from API"</strong> button above to load destination fields.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer Navigation Buttons */}
+            <div className="px-6 py-4 border-t border-border bg-muted/20 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsEditMappingModalOpen(false)}
+                className="px-4 py-1.5 text-xs font-semibold border border-border rounded bg-card hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSave()}
+                className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow transition-all active:scale-95"
+              >
+                Save Mappings
+              </button>
+            </div>
           </div>
         </div>
       )}
