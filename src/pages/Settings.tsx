@@ -95,7 +95,7 @@ function AIPreferences() {
   const [models, setModels] = useState({
     openai: "gpt-4o",
     anthropic: "claude-3-5-sonnet-latest",
-    gemini: "gemini-2.5-flash",
+    gemini: "gemini-3.5-flash",
   });
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
@@ -113,7 +113,7 @@ function AIPreferences() {
         setModels({
           openai: data.openai_model || "gpt-4o",
           anthropic: data.anthropic_model || "claude-3-5-sonnet-latest",
-          gemini: data.gemini_model || "gemini-2.5-flash",
+          gemini: data.gemini_model || "gemini-3.5-flash",
         });
       })
       .catch(() => {
@@ -167,7 +167,7 @@ function AIPreferences() {
       id: "Gemini",
       label: "Gemini (Google)",
       color: "bg-blue-500",
-      description: "gemini-2.5-flash - Multimodal",
+      description: "gemini-3.5-flash - Multimodal",
       keyName: "gemini",
     },
   ];
@@ -282,12 +282,12 @@ function AIPreferences() {
                         )}
                         {p.id === "Gemini" && (
                           <>
-                            <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended)</option>
+                            <option value="gemini-3.5-flash">gemini-3.5-flash (Recommended)</option>
+                            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                             <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                             <option value="gemini-2.0-flash">gemini-2.0-flash</option>
                             <option value="gemini-1.5-flash">gemini-1.5-flash</option>
                             <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-                            <option value="gemini-3.5-flash">gemini-3.5-flash</option>
                           </>
                         )}
                       </select>
