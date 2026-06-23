@@ -36,12 +36,13 @@ export default function DocumentDetail() {
   const [isSavingChanges, setIsSavingChanges] = useState(false);
 
   // Collapsible section states
-  const [isRawEmailCollapsed, setIsRawEmailCollapsed] = useState(false);
-  const [isEmailContextCollapsed, setIsEmailContextCollapsed] = useState(false);
+  const [isRawEmailCollapsed, setIsRawEmailCollapsed] = useState(true);
+  const [isEmailContextCollapsed, setIsEmailContextCollapsed] = useState(true);
   const [isPdfViewCollapsed, setIsPdfViewCollapsed] = useState(false);
-  const [isAttachmentsCollapsed, setIsAttachmentsCollapsed] = useState(false);
+  const [isAttachmentsCollapsed, setIsAttachmentsCollapsed] = useState(true);
   const [isExtractedDataCollapsed, setIsExtractedDataCollapsed] = useState(false);
   const [isMatrixCollapsed, setIsMatrixCollapsed] = useState(false);
+  const [isProvenanceCollapsed, setIsProvenanceCollapsed] = useState(true);
   const [sapPayload, setSapPayload] = useState<any>(null);
   const [isPayloadCollapsed, setIsPayloadCollapsed] = useState(true);
   const [isFetchingPayload, setIsFetchingPayload] = useState(false);
@@ -1195,7 +1196,11 @@ export default function DocumentDetail() {
               {/* Data Ingestion & API Provenance Trace Card */}
               {currentDoc?.data?.field_origins && Object.keys(currentDoc.data.field_origins).length > 0 && (
                 <div className="fiori-card overflow-hidden shadow-sm border border-indigo-500/25 bg-card/60 backdrop-blur-sm mt-6 animate-in fade-in duration-300">
-                  <div className="p-4 border-b border-indigo-100 bg-indigo-500/5 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setIsProvenanceCollapsed(!isProvenanceCollapsed)}
+                    className="w-full p-4 border-b border-indigo-100 bg-indigo-500/5 flex items-center justify-between hover:bg-muted/30 transition-colors text-left focus:outline-none"
+                  >
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="h-4.5 w-4.5 text-indigo-500 animate-pulse" />
                       <div>
@@ -1207,110 +1212,119 @@ export default function DocumentDetail() {
                         </p>
                       </div>
                     </div>
-                    <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black tracking-tight border uppercase bg-indigo-500/10 border-indigo-500/20 text-indigo-500 shadow-sm">
-                      Trace Active
-                    </span>
-                  </div>
-                  <div className="p-4 space-y-4">
-                    <div className="overflow-x-auto border border-border/60 rounded-xl bg-card">
-                      <table className="w-full text-left border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-muted/40 border-b border-border/80">
-                            <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Field Name</th>
-                            <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Resolved Value</th>
-                            <th className="p-3 text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Source / Provenance Origin</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border/50">
-                          {Object.entries(currentDoc.data.field_origins).map(([fieldName, info]: [string, any]) => {
-                            const label = fieldName
-                              .split('_')
-                              .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-                              .join(' ');
-                            
-                            const isApi = info.source.toLowerCase().includes('api');
-                            const isGmail = info.source.toLowerCase().includes('gmail') || info.source.toLowerCase().includes('outlook') || info.source.toLowerCase().includes('settings');
-
-                            return (
-                              <tr key={fieldName} className="hover:bg-muted/15 transition-colors">
-                                <td className="p-3 font-semibold text-foreground">{label}</td>
-                                <td className="p-3 font-mono text-[11px] truncate max-w-[200px]" title={info.value}>{info.value || "—"}</td>
-                                <td className="p-3">
-                                  <span className={cn(
-                                    "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border shadow-sm",
-                                    isApi 
-                                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600" 
-                                      : isGmail 
-                                        ? "bg-blue-500/10 border-blue-500/20 text-blue-600"
-                                        : "bg-amber-500/10 border-amber-500/20 text-amber-600"
-                                  )}>
-                                    {info.source}
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black tracking-tight border uppercase bg-indigo-500/10 border-indigo-500/20 text-indigo-500 shadow-sm mr-1">
+                        Trace Active
+                      </span>
+                      {isProvenanceCollapsed ? (
+                        <ChevronRight className="h-4 w-4 text-indigo-500" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-indigo-500" />
+                      )}
                     </div>
+                  </button>
+                  {!isProvenanceCollapsed && (
+                    <div className="p-4 space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
+                      <div className="overflow-x-auto border border-border/60 rounded-xl bg-card">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-muted/40 border-b border-border/80">
+                              <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Field Name</th>
+                              <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Resolved Value</th>
+                              <th className="p-3 text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Source / Provenance Origin</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border/50">
+                            {Object.entries(currentDoc.data.field_origins).map(([fieldName, info]: [string, any]) => {
+                              const label = fieldName
+                                .split('_')
+                                .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                                .join(' ');
+                              
+                              const isApi = info.source.toLowerCase().includes('api');
+                              const isGmail = info.source.toLowerCase().includes('gmail') || info.source.toLowerCase().includes('outlook') || info.source.toLowerCase().includes('settings');
 
-                    {/* Line Item Material Matches */}
-                    {currentDoc.data.line_item_origins && Object.keys(currentDoc.data.line_item_origins).length > 0 && (
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Line Item Material API Matches</label>
-                        <div className="p-3 bg-emerald-500/5 rounded-xl border border-emerald-500/15 space-y-1.5 shadow-inner">
-                          {Object.entries(currentDoc.data.line_item_origins).map(([idxStr, info]: [string, any]) => {
-                            const idx = parseInt(idxStr);
-                            const item = currentDoc.data.line_items?.[idx];
-                            if (!item) return null;
-                            return (
-                              <div key={idx} className="flex items-center justify-between text-[11px] font-medium border-b border-emerald-500/10 pb-1.5 last:border-b-0 last:pb-0">
-                                <div className="flex items-center gap-1.5 text-foreground">
-                                  <span className="font-bold text-emerald-600">Item #{item.item_number || (idx + 1)}:</span>
-                                  <span className="font-semibold truncate max-w-[220px]">{item.material_description}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-mono bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[10px] text-emerald-600 font-bold">
-                                    SKU: {item.sap_material_number}
-                                  </span>
-                                  <span className="text-[9px] text-muted-foreground italic">
-                                    ({info.sap_material_number})
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                              return (
+                                <tr key={fieldName} className="hover:bg-muted/15 transition-colors">
+                                  <td className="p-3 font-semibold text-foreground">{label}</td>
+                                  <td className="p-3 font-mono text-[11px] truncate max-w-[200px]" title={info.value}>{info.value || "—"}</td>
+                                  <td className="p-3">
+                                    <span className={cn(
+                                      "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border shadow-sm",
+                                      isApi 
+                                        ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600" 
+                                        : isGmail 
+                                          ? "bg-blue-500/10 border-blue-500/20 text-blue-600"
+                                          : "bg-amber-500/10 border-amber-500/20 text-amber-600"
+                                    )}>
+                                      {info.source}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
-                    )}
-                    {/* Line Item Pricing Origins */}
-                    {currentDoc.data.line_items?.some((item: any) => item.pricing_origin) && (
-                      <div className="space-y-2 mt-4 animate-in fade-in slide-in-from-top-1 duration-200">
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Line Item Price Determination</label>
-                        <div className="p-3 bg-indigo-500/5 rounded-xl border border-indigo-500/15 space-y-1.5 shadow-inner">
-                          {currentDoc.data.line_items.map((item: any, idx: number) => {
-                            if (!item.pricing_origin) return null;
-                            return (
-                              <div key={idx} className="flex items-center justify-between text-[11px] font-medium border-b border-indigo-500/10 pb-1.5 last:border-b-0 last:pb-0">
-                                <div className="flex items-center gap-1.5 text-foreground">
-                                  <span className="font-bold text-indigo-600">Item #{item.item_number || (idx + 1)}:</span>
-                                  <span className="font-semibold truncate max-w-[220px]">{item.material_description}</span>
+
+                      {/* Line Item Material Matches */}
+                      {currentDoc.data.line_item_origins && Object.keys(currentDoc.data.line_item_origins).length > 0 && (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Line Item Material API Matches</label>
+                          <div className="p-3 bg-emerald-500/5 rounded-xl border border-emerald-500/15 space-y-1.5 shadow-inner">
+                            {Object.entries(currentDoc.data.line_item_origins).map(([idxStr, info]: [string, any]) => {
+                              const idx = parseInt(idxStr);
+                              const item = currentDoc.data.line_items?.[idx];
+                              if (!item) return null;
+                              return (
+                                <div key={idx} className="flex items-center justify-between text-[11px] font-medium border-b border-emerald-500/10 pb-1.5 last:border-b-0 last:pb-0">
+                                  <div className="flex items-center gap-1.5 text-foreground">
+                                    <span className="font-bold text-emerald-600">Item #{item.item_number || (idx + 1)}:</span>
+                                    <span className="font-semibold truncate max-w-[220px]">{item.material_description}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[10px] text-emerald-600 font-bold">
+                                      SKU: {item.sap_material_number}
+                                    </span>
+                                    <span className="text-[9px] text-muted-foreground italic">
+                                      ({info.sap_material_number})
+                                    </span>
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-mono bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded text-[10px] text-indigo-600 font-bold">
-                                    Price: {currentDoc.data.totals?.currency || "USD"} {item.price}
-                                  </span>
-                                  <span className="text-[9px] text-muted-foreground italic">
-                                    ({item.pricing_origin})
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })}
+                              );
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
+                      )}
+                      {/* Line Item Pricing Origins */}
+                      {currentDoc.data.line_items?.some((item: any) => item.pricing_origin) && (
+                        <div className="space-y-2 mt-4 animate-in fade-in slide-in-from-top-1 duration-200">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Line Item Price Determination</label>
+                          <div className="p-3 bg-indigo-500/5 rounded-xl border border-indigo-500/15 space-y-1.5 shadow-inner">
+                            {currentDoc.data.line_items.map((item: any, idx: number) => {
+                              if (!item.pricing_origin) return null;
+                              return (
+                                <div key={idx} className="flex items-center justify-between text-[11px] font-medium border-b border-indigo-500/10 pb-1.5 last:border-b-0 last:pb-0">
+                                  <div className="flex items-center gap-1.5 text-foreground">
+                                    <span className="font-bold text-indigo-600">Item #{item.item_number || (idx + 1)}:</span>
+                                    <span className="font-semibold truncate max-w-[220px]">{item.material_description}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded text-[10px] text-indigo-600 font-bold">
+                                      Price: {currentDoc.data.totals?.currency || "USD"} {item.price}
+                                    </span>
+                                    <span className="text-[9px] text-muted-foreground italic">
+                                      ({item.pricing_origin})
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
