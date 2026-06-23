@@ -38,7 +38,7 @@ export default function DuplicateMonitor() {
     
     toast.loading("Moving duplicate document to Recycle Bin...", { id: "dup-action" });
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (res.ok) {
         toast.success(`Duplicate confirmed: ${invoiceNo}. Document moved to Recycle Bin.`, { id: "dup-action" });
         setComparing(null);
@@ -56,7 +56,7 @@ export default function DuplicateMonitor() {
     
     toast.loading("Marking document as unique...", { id: "dup-action" });
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}`, {
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ override_duplicate: true })

@@ -78,7 +78,7 @@ export default function DocumentDetail() {
 
   const fetchDocDetail = async () => {
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}`);
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}`);
       if (res.ok) {
         const doc = await res.json();
         setCurrentDoc(normalizeDoc(doc));
@@ -117,7 +117,7 @@ export default function DocumentDetail() {
     if (!id) return;
     setIsFetchingPayload(true);
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}/sap-payload`);
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}/sap-payload`);
       if (res.ok) {
         const data = await res.json();
         setSapPayload(data);
@@ -207,7 +207,7 @@ export default function DocumentDetail() {
     setIsSavingChanges(true);
     toast.loading("Saving changes to server...", { id: "save-doc" });
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}`, {
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -242,7 +242,7 @@ export default function DocumentDetail() {
     setIsReparsing(true);
     toast.loading("Re-parsing document with AI...", { id: "reparse-doc" });
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}/reparse`, {
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}/reparse`, {
         method: "POST"
       });
       const data = await res.json();
@@ -262,7 +262,7 @@ export default function DocumentDetail() {
   const handleDiscard = async () => {
     if (!confirm("Are you sure you want to discard/delete this document? It will be moved to the Recycle Bin.")) return;
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}`, { method: "DELETE" });
       if (res.ok) {
         toast.success("Document successfully moved to Recycle Bin");
         navigate("/documents");
@@ -280,7 +280,7 @@ export default function DocumentDetail() {
     toast.loading("Saving and posting Sales Order to SAP...", { id: "sap-post" });
     try {
       // 1. Save changes first
-      await fetch(`${API_BASE}/documents/${id}`, {
+      await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -294,7 +294,7 @@ export default function DocumentDetail() {
       });
 
       // 2. Post to SAP
-      const res = await fetch(`${API_BASE}/documents/${id}/post-sap`, {
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}/post-sap`, {
         method: "POST"
       });
       const data = await res.json();

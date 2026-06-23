@@ -175,14 +175,14 @@ export default function Documents() {
 
   const handleRowClick = (id: string) => {
     if (showDeleted) return; // Disable detail view in recycle bin
-    navigate(`/documents/${id}`);
+    navigate(`/documents/${encodeURIComponent(id)}`);
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm(`Are you sure you want to move document ${id} to Recycle Bin?`)) return;
     
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}`, { method: "DELETE" });
       const data = await res.json();
       
       if (res.ok) {
@@ -199,7 +199,7 @@ export default function Documents() {
 
   const handleRestore = async (id: string) => {
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}/restore`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/restore`, { method: "POST" });
       const data = await res.json();
       if (res.ok) {
         toast.success(`Document ${id} successfully restored.`);
@@ -216,7 +216,7 @@ export default function Documents() {
   const handleReparse = async (id: string) => {
     toast.loading(`Re-parsing document ${id}...`, { id: `reparse-${id}` });
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}/reparse`, {
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/reparse`, {
         method: "POST"
       });
       const data = await res.json();
@@ -235,7 +235,7 @@ export default function Documents() {
     if (!confirm(`Are you sure you want to PERMANENTLY delete document ${id}? This action CANNOT be undone.`)) return;
     
     try {
-      const res = await fetch(`${API_BASE}/documents/${id}?force=true`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}?force=true`, { method: "DELETE" });
       const data = await res.json();
       if (res.ok) {
         toast.success(`Document ${id} permanently deleted.`);
@@ -256,7 +256,7 @@ export default function Documents() {
     try {
       let successCount = 0;
       for (const id of selectedRows) {
-        const res = await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}`, { method: "DELETE" });
         if (res.ok) successCount++;
       }
       
@@ -275,7 +275,7 @@ export default function Documents() {
     try {
       let successCount = 0;
       for (const id of selectedRows) {
-        const res = await fetch(`${API_BASE}/documents/${id}/restore`, { method: "POST" });
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/restore`, { method: "POST" });
         if (res.ok) successCount++;
       }
       toast.success(`Successfully restored ${successCount} documents`, { id: "bulk-restore" });
@@ -293,7 +293,7 @@ export default function Documents() {
     try {
       let successCount = 0;
       for (const id of selectedRows) {
-        const res = await fetch(`${API_BASE}/documents/${id}?force=true`, { method: "DELETE" });
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}?force=true`, { method: "DELETE" });
         if (res.ok) successCount++;
       }
       toast.success(`Successfully permanently deleted ${successCount} documents`, { id: "bulk-delete-perm" });
