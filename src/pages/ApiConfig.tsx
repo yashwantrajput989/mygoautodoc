@@ -55,6 +55,9 @@ const DEFAULT_SALES_ORDER_MAPPINGS = [
   { sourceField: "quantity", targetField: "RequestedQuantity" },
   { sourceField: "price", targetField: "NetUnitPrice" },
   { sourceField: "total_amount", targetField: "TotalNetAmount" },
+  { sourceField: "sales_organization", targetField: "SalesOrganization" },
+  { sourceField: "distribution_channel", targetField: "DistributionChannel" },
+  { sourceField: "division", targetField: "OrganizationDivision" },
 ];
 
 const DEFAULT_VENDOR_INVOICE_MAPPINGS = [
@@ -64,7 +67,11 @@ const DEFAULT_VENDOR_INVOICE_MAPPINGS = [
   { sourceField: "invoice_reference", targetField: "SupplierInvoiceIDByInvcgParty" },
   { sourceField: "po_number", targetField: "PurchaseOrder" },
   { sourceField: "total_amount", targetField: "GrossAmount" },
+  { sourceField: "company_code", targetField: "CompanyCode" },
 ];
+
+const DEFAULT_BUSINESS_PARTNER_MAPPINGS: any[] = [];
+const DEFAULT_CUSTOMER_MATERIAL_INFO_MAPPINGS: any[] = [];
 
 export default function ApiConfig() {
   const [apis, setApis] = useState<ApiConfigItem[]>([]);
@@ -85,7 +92,8 @@ export default function ApiConfig() {
   const [activeEndpoint, setActiveEndpoint] = useState("");
 
   // Per-connection Schema Mapping State (collapsed inside adding page)
-  const [formContext, setFormContext] = useState<"SalesOrder" | "VendorInvoice">("SalesOrder");
+  const [formContext, setFormContext] = useState<"SalesOrder" | "VendorInvoice" | "BusinessPartner" | "CustomerMaterialInfo">("SalesOrder");
+  const isMappingRequired = formContext === "SalesOrder" || formContext === "VendorInvoice";
   const [formMappings, setFormMappings] = useState<{ sourceField: string; targetField: string }[]>([]);
   const [isMappingExpanded, setIsMappingExpanded] = useState(false);
   const [fetchedTargetFields, setFetchedTargetFields] = useState<any[] | null>(null);
@@ -181,7 +189,7 @@ export default function ApiConfig() {
     setFormKeyValue(api.key_value || "");
     setFormOauthTokenUrl(api.oauth_token_url || "");
     
-    const contextVal = (api.context || "SalesOrder") as "SalesOrder" | "VendorInvoice";
+    const contextVal = (api.context || "SalesOrder") as "SalesOrder" | "VendorInvoice" | "BusinessPartner" | "CustomerMaterialInfo";
     setFormContext(contextVal);
     
     const savedMappings = api.mappings || [];
@@ -204,7 +212,7 @@ export default function ApiConfig() {
     setFormKeyValue(api.key_value || "");
     setFormOauthTokenUrl(api.oauth_token_url || "");
     
-    const contextVal = (api.context || "SalesOrder") as "SalesOrder" | "VendorInvoice";
+    const contextVal = (api.context || "SalesOrder") as "SalesOrder" | "VendorInvoice" | "BusinessPartner" | "CustomerMaterialInfo";
     setFormContext(contextVal);
     
     const savedMappings = api.mappings || [];
@@ -274,8 +282,12 @@ export default function ApiConfig() {
       toast.error("Name and Endpoint URL are required");
       return;
     }
-    setWizardStep(2);
-    handleFetchSchema();
+    if (isMappingRequired) {
+      setWizardStep(2);
+      handleFetchSchema();
+    } else {
+      setWizardStep(3);
+    }
   };
 
   const handleSave = async (e?: React.FormEvent) => {
@@ -285,7 +297,7 @@ export default function ApiConfig() {
       return;
     }
 
-    if (!formMappings || formMappings.length === 0) {
+    if (isMappingRequired && (!formMappings || formMappings.length === 0)) {
       toast.error("Field mappings are mandatory to save the API connection.");
       return;
     }
@@ -520,7 +532,10 @@ export default function ApiConfig() {
       { id: "order_received_date", label: "Order received date", desc: "Date email order received" },
       { id: "payment_terms", label: "Payment terms", desc: "Invoice payment terms" },
       { id: "inco_terms", label: "Inco terms", desc: "Shipping delivery incoterms" },
-      { id: "customer_po_number", label: "Customer PO number", desc: "PO reference key" }
+      { id: "customer_po_number", label: "Customer PO number", desc: "PO reference key" },
+      { id: "sales_organization", label: "Sales Organization", desc: "SAP Sales Organization" },
+      { id: "distribution_channel", label: "Distribution Channel", desc: "SAP Distribution Channel" },
+      { id: "division", label: "Division", desc: "SAP Division" }
     ],
     Item: [
       { id: "item_number", label: "Item number", desc: "Order line item index" },
@@ -551,7 +566,10 @@ export default function ApiConfig() {
       { id: "SalesOrderDate", label: "SalesOrderDate (Date)", desc: "Sales order create date" },
       { id: "PaymentTerms", label: "PaymentTerms (Code)", desc: "SAP terms of payment" },
       { id: "Incoterms", label: "Incoterms (Code)", desc: "SAP delivery incoterms" },
-      { id: "PurchaseOrderByCustomer", label: "PurchaseOrderByCustomer (Ref)", desc: "Customer reference PO number" }
+      { id: "PurchaseOrderByCustomer", label: "PurchaseOrderByCustomer (Ref)", desc: "Customer reference PO number" },
+      { id: "SalesOrganization", label: "SalesOrganization (Org)", desc: "SAP Sales Organization" },
+      { id: "DistributionChannel", label: "DistributionChannel (Org)", desc: "SAP Distribution Channel" },
+      { id: "OrganizationDivision", label: "OrganizationDivision (Org)", desc: "SAP Division" }
     ],
     Item: [
       { id: "SalesOrderItem", label: "SalesOrderItem (Item)", desc: "Sales order line item" },
@@ -580,7 +598,8 @@ export default function ApiConfig() {
       { id: "invoice_date", label: "Invoice Date", desc: "Issue date on document" },
       { id: "invoice_reference", label: "Invoice Reference", desc: "Document invoice number" },
       { id: "po_number", label: "PO Number", desc: "Purchase order matches key" },
-      { id: "po_type", label: "PO Type PO/Non-PO", desc: "Invoice categorizations flag" }
+      { id: "po_type", label: "PO Type PO/Non-PO", desc: "Invoice categorizations flag" },
+      { id: "company_code", label: "Company Code", desc: "SAP Company Code" }
     ],
     Item: [
       { id: "item_number", label: "Item number", desc: "Invoice line item index" },
@@ -609,7 +628,8 @@ export default function ApiConfig() {
       { id: "DocumentDate", label: "DocumentDate (Date)", desc: "Supplier invoice issue date" },
       { id: "SupplierInvoiceIDByInvcgParty", label: "SupplierInvoiceIDByInvcgParty (Ref)", desc: "Reference invoice number" },
       { id: "PurchaseOrder", label: "PurchaseOrder (Ref)", desc: "Matching SAP purchase order key" },
-      { id: "InvoiceType", label: "InvoiceType (Code)", desc: "Invoice/Credit memo categories" }
+      { id: "InvoiceType", label: "InvoiceType (Code)", desc: "Invoice/Credit memo categories" },
+      { id: "CompanyCode", label: "CompanyCode (Org)", desc: "SAP Company Code" }
     ],
     Item: [
       { id: "SupplierInvoiceItem", label: "SupplierInvoiceItem (Item)", desc: "Invoice item line sequence" },
@@ -631,7 +651,37 @@ export default function ApiConfig() {
     ]
   };
 
-  const getSourceCategories = () => (formContext === "SalesOrder" ? SALES_ORDER_SOURCE : VENDOR_INVOICE_SOURCE);
+  const BUSINESS_PARTNER_SOURCE = {
+    Header: [
+      { id: "customer_name", label: "Customer Name", desc: "Key to search Business Partner" }
+    ],
+    Address: [
+      { id: "customer_address", label: "Customer Address", desc: "Matched BP Address" },
+      { id: "sold_to_address", label: "Sold to Address", desc: "Matched BP Address" }
+    ],
+    IDs: [
+      { id: "sold_to_party_number", label: "Sold to Party ID", desc: "Matched Customer ID" },
+      { id: "supplier_number", label: "Supplier ID", desc: "Matched Supplier/Vendor ID" }
+    ]
+  };
+
+  const CUSTOMER_MATERIAL_INFO_SOURCE = {
+    Item: [
+      { id: "material_description", label: "Material Description", desc: "Extracted line text" },
+      { id: "customer_material_number", label: "Customer Material SKU", desc: "Buyer specific SKU" }
+    ],
+    SAP: [
+      { id: "sap_material_number", label: "SAP Material SKU", desc: "Matched SAP internal SKU" }
+    ]
+  };
+
+  const getSourceCategories = () => {
+    if (formContext === "SalesOrder") return SALES_ORDER_SOURCE;
+    if (formContext === "VendorInvoice") return VENDOR_INVOICE_SOURCE;
+    if (formContext === "BusinessPartner") return BUSINESS_PARTNER_SOURCE;
+    return CUSTOMER_MATERIAL_INFO_SOURCE;
+  };
+
   const getTargetCategories = () => {
     if (fetchedTargetFields && fetchedTargetFields.length > 0) {
       return { "Fetched API Fields": fetchedTargetFields };
@@ -775,13 +825,15 @@ export default function ApiConfig() {
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
-                          <button
-                            onClick={() => handleOpenEditMapping(api)}
-                            className="w-7 h-7 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
-                            title="Edit Field Mappings"
-                          >
-                            <ArrowLeftRight className="h-3.5 w-3.5" />
-                          </button>
+                          {(api.context === "SalesOrder" || api.context === "VendorInvoice" || !api.context) && (
+                            <button
+                              onClick={() => handleOpenEditMapping(api)}
+                              className="w-7 h-7 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
+                              title="Edit Field Mappings"
+                            >
+                              <ArrowLeftRight className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                           <button
                             onClick={() => handleDelete(api.id)}
                             className="w-7 h-7 rounded border border-destructive/20 flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/5 transition-colors"
@@ -956,7 +1008,11 @@ export default function ApiConfig() {
                 <div className="absolute left-6 right-6 top-[14px] h-0.5 bg-border -z-10" />
                 <div 
                   className="absolute left-6 top-[14px] h-0.5 bg-primary transition-all duration-300 -z-10"
-                  style={{ width: wizardStep === 1 ? '0%' : wizardStep === 2 ? '50%' : '100%' }}
+                  style={{ 
+                    width: !isMappingRequired 
+                      ? (wizardStep === 1 ? '0%' : '100%') 
+                      : (wizardStep === 1 ? '0%' : wizardStep === 2 ? '50%' : '100%') 
+                  }}
                 />
 
                 {/* Step 1 */}
@@ -972,20 +1028,22 @@ export default function ApiConfig() {
                   <span className="text-[9px] font-bold uppercase text-foreground">Configure</span>
                 </div>
 
-                {/* Step 2 */}
-                <div className="flex flex-col items-center gap-1 bg-card px-2">
-                  <div className={cn(
-                    "w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all",
-                    wizardStep > 2 
-                      ? "bg-primary border-primary text-primary-foreground" 
-                      : wizardStep === 2 
-                        ? "border-primary bg-primary/10 text-primary" 
-                        : "border-border bg-card text-muted-foreground"
-                  )}>
-                    2
+                {/* Step 2 (Only if Mapping is Required) */}
+                {isMappingRequired && (
+                  <div className="flex flex-col items-center gap-1 bg-card px-2">
+                    <div className={cn(
+                      "w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all",
+                      wizardStep > 2 
+                        ? "bg-primary border-primary text-primary-foreground" 
+                        : wizardStep === 2 
+                          ? "border-primary bg-primary/10 text-primary" 
+                          : "border-border bg-card text-muted-foreground"
+                    )}>
+                      2
+                    </div>
+                    <span className="text-[9px] font-bold uppercase text-foreground">Map Fields</span>
                   </div>
-                  <span className="text-[9px] font-bold uppercase text-foreground">Map Fields</span>
-                </div>
+                )}
 
                 {/* Step 3 */}
                 <div className="flex flex-col items-center gap-1 bg-card px-2">
@@ -995,7 +1053,7 @@ export default function ApiConfig() {
                       ? "border-primary bg-primary/10 text-primary" 
                       : "border-border bg-card text-muted-foreground"
                   )}>
-                    3
+                    {isMappingRequired ? 3 : 2}
                   </div>
                   <span className="text-[9px] font-bold uppercase text-foreground">Review & Test</span>
                 </div>
@@ -1038,15 +1096,20 @@ export default function ApiConfig() {
                     <select
                       value={formContext}
                       onChange={(e) => {
-                        const newContext = e.target.value as "SalesOrder" | "VendorInvoice";
+                        const newContext = e.target.value as "SalesOrder" | "VendorInvoice" | "BusinessPartner" | "CustomerMaterialInfo";
                         setFormContext(newContext);
-                        setFormMappings(newContext === "SalesOrder" ? DEFAULT_SALES_ORDER_MAPPINGS : DEFAULT_VENDOR_INVOICE_MAPPINGS);
+                        if (newContext === "SalesOrder") setFormMappings(DEFAULT_SALES_ORDER_MAPPINGS);
+                        else if (newContext === "VendorInvoice") setFormMappings(DEFAULT_VENDOR_INVOICE_MAPPINGS);
+                        else if (newContext === "BusinessPartner") setFormMappings(DEFAULT_BUSINESS_PARTNER_MAPPINGS);
+                        else setFormMappings(DEFAULT_CUSTOMER_MATERIAL_INFO_MAPPINGS);
                         setFetchedTargetFields(null);
                       }}
                       className="w-full h-9 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none"
                     >
-                      <option value="SalesOrder">Sales Order</option>
-                      <option value="VendorInvoice">Vendor Invoice</option>
+                      <option value="SalesOrder">Sales Order Ingestion & Posting</option>
+                      <option value="VendorInvoice">Vendor Invoice Ingestion & Posting</option>
+                      <option value="BusinessPartner">Business Partner OData Lookup (Customer/Address Data)</option>
+                      <option value="CustomerMaterialInfo">Customer Material Info OData Lookup (SKU/CMIR Data)</option>
                     </select>
                   </div>
 
@@ -1423,27 +1486,46 @@ export default function ApiConfig() {
                   <div className="p-4 bg-muted/20 border border-border rounded-lg space-y-3">
                     <div className="flex items-center justify-between border-b border-border pb-1.5">
                       <h3 className="text-xs font-bold uppercase tracking-wider text-primary">
-                        Mapped Fields Summary
+                        {isMappingRequired ? "Mapped Fields Summary" : "Schema Resolution"}
                       </h3>
-                      <span className="px-2 py-0.5 text-[10px] font-bold bg-primary/10 text-primary border border-primary/20 rounded-full font-mono">
-                        {formMappings.length} Mapped
-                      </span>
+                      {!isMappingRequired && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 rounded-full font-mono">
+                          Automated
+                        </span>
+                      )}
+                      {isMappingRequired && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold bg-primary/10 text-primary border border-primary/20 rounded-full font-mono">
+                          {formMappings.length} Mapped
+                        </span>
+                      )}
                     </div>
 
-                    {formMappings.length > 0 ? (
-                      <div className="max-h-[160px] overflow-y-auto space-y-1.5 pr-1 font-mono text-[10px]">
-                        {formMappings.map((mapping, index) => (
-                          <div key={index} className="flex items-center justify-between p-1.5 bg-card border border-border rounded hover:bg-muted/10">
-                            <span className="text-indigo-500 font-bold">{mapping.sourceField}</span>
-                            <span className="text-muted-foreground font-bold">→</span>
-                            <span className="text-emerald-600 font-bold">{mapping.targetField}</span>
-                          </div>
-                        ))}
-                      </div>
+                    {isMappingRequired ? (
+                      formMappings.length > 0 ? (
+                        <div className="max-h-[160px] overflow-y-auto space-y-1.5 pr-1 font-mono text-[10px]">
+                          {formMappings.map((mapping, index) => (
+                            <div key={index} className="flex items-center justify-between p-1.5 bg-card border border-border rounded hover:bg-muted/10">
+                              <span className="text-indigo-500 font-bold">{mapping.sourceField}</span>
+                              <span className="text-muted-foreground font-bold">→</span>
+                              <span className="text-emerald-600 font-bold">{mapping.targetField}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground italic text-center py-4">
+                          No field mappings created. Go back to Map Fields to add mappings.
+                        </p>
+                      )
                     ) : (
-                      <p className="text-xs text-muted-foreground italic text-center py-4">
-                        No field mappings created. Go back to Map Fields to add mappings.
-                      </p>
+                      <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded flex items-start gap-2.5 animate-in fade-in duration-200">
+                        <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs font-bold text-foreground">Dynamic Schema Resolution Active</p>
+                          <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
+                            Field mappings are automated for this API type. The ingestion engine will dynamically resolve and parse attributes returned from this connector.
+                          </p>
+                        </div>
+                      </div>
                     )}
                   </div>
 
@@ -1497,7 +1579,7 @@ export default function ApiConfig() {
                     onClick={handleNextToStep2}
                     className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow transition-all active:scale-95"
                   >
-                    Next: Map Fields
+                    {isMappingRequired ? "Next: Map Fields" : "Next: Review & Test"}
                   </button>
                 </>
               ) : wizardStep === 2 ? (
@@ -1521,10 +1603,10 @@ export default function ApiConfig() {
                 <>
                   <button
                     type="button"
-                    onClick={() => setWizardStep(2)}
+                    onClick={() => setWizardStep(isMappingRequired ? 2 : 1)}
                     className="px-4 py-1.5 text-xs font-semibold border border-border rounded bg-card hover:bg-muted transition-colors"
                   >
-                    Back: Field Mappings
+                    {isMappingRequired ? "Back: Field Mappings" : "Back: Config Details"}
                   </button>
                   <button
                     type="button"

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-type StatusType = "success" | "error" | "warning" | "info" | "pending" | "duplicate" | "in_progress" | "ready_to_send" | "failed";
+type StatusType = "success" | "error" | "warning" | "info" | "pending" | "duplicate" | "in_progress" | "ready_to_send" | "failed" | "failed_parsing";
 
 const statusConfig: Record<StatusType, { label: string; className: string }> = {
   success: { label: "Success", className: "bg-success/10 text-success border border-success/20" },
@@ -12,6 +12,7 @@ const statusConfig: Record<StatusType, { label: string; className: string }> = {
   duplicate: { label: "Duplicate", className: "bg-accent/10 text-accent border border-accent/20" },
   in_progress: { label: "In Progress", className: "bg-amber-500/10 text-amber-500 border border-amber-500/20" },
   ready_to_send: { label: "Ready to Send", className: "bg-blue-500/10 text-blue-500 border border-blue-500/20" },
+  failed_parsing: { label: "Failed Parsing", className: "bg-orange-500/10 text-orange-500 border border-orange-500/20" },
 };
 
 interface StatusBadgeProps {

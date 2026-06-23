@@ -15,6 +15,7 @@ import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import AdminPage from "./pages/Admin";
+import ServerLogs from "./pages/ServerLogs";
 
 const queryClient = new QueryClient();
 
@@ -50,6 +51,7 @@ const App = () => (
                     <Route path="/analytics" element={<Analytics />} />
                     <Route path="/api-config" element={<ApiConfig />} />
                     <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/serverlogs" element={<ServerLogs />} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>
                 </AppShell>

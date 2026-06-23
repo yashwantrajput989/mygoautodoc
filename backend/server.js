@@ -14,11 +14,83 @@ import { simpleParser } from 'mailparser';
 import { GoogleGenAI } from '@google/genai';
 import * as msal from '@azure/msal-node';
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 dotenvConfig({ path: path.join(__dirname, '.env') });
+
+const logEmitter = new EventEmitter();
+const LOG_FILE_PATH = path.join(__dirname, 'master.log');
+
+const originalConsoleLog = console.log;
+const originalConsoleWarn = console.warn;
+const originalConsoleError = console.error;
+
+function formatLogDate(date) {
+    const pad = (n, m = 2) => String(n).padStart(m, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())},${pad(date.getMilliseconds(), 3)}`;
+}
+
+function writeLog(level, args) {
+    const timestamp = formatLogDate(new Date());
+    const message = args.map(arg => {
+        if (arg instanceof Error) {
+            return arg.stack || arg.message;
+        }
+        if (typeof arg === 'object' && arg !== null) {
+            try {
+                return JSON.stringify(arg, null, 2);
+            } catch (e) {
+                return '[Circular Object]';
+            }
+        }
+        return String(arg);
+    }).join(' ');
+
+    const logLine = `${timestamp} - ${level} - ${message}\n`;
+
+    fs.appendFile(LOG_FILE_PATH, logLine, (err) => {
+        if (err) {
+            originalConsoleError.call(console, 'Error writing to master.log:', err);
+        }
+    });
+
+    logEmitter.emit('log', { timestamp, level, message });
+}
+
+console.log = (...args) => {
+    originalConsoleLog.apply(console, args);
+    writeLog('INFO', args);
+};
+
+console.warn = (...args) => {
+    originalConsoleWarn.apply(console, args);
+    writeLog('WARNING', args);
+};
+
+console.error = (...args) => {
+    originalConsoleError.apply(console, args);
+    writeLog('ERROR', args);
+};
+
+console.info = console.log;
+
+function readLastLines(filePath, maxLines = 150) {
+    try {
+        if (!fs.existsSync(filePath)) return [];
+        const fileContent = fs.readFileSync(filePath, 'utf8');
+        const lines = fileContent.split(/\r?\n/);
+        if (lines.length > 0 && lines[lines.length - 1] === '') {
+            lines.pop();
+        }
+        return lines.slice(-maxLines);
+    } catch (err) {
+        originalConsoleError.call(console, 'Error reading log file history:', err);
+        return [];
+    }
+}
 
 const app = express();
 app.use(cors());
@@ -144,7 +216,7 @@ First, determine the document context. It must be either "Sales Order" or "Vendo
      * customer_po_number: Customer's Purchase Order number.
    - ITEM (under "line_items" array):
      * item_number: Item/pos number (e.g., "10", "20", "30").
-     * customer_material_number: Customer's SKU/material code.
+     * customer_material_number: Customer's SKU/material code/Article number/Reference/Part number (often labeled as "Article", "Code Article", "Ref", "Réf.", "SKU", "Part No", "Material No").
      * material_description: Name/description of the product.
      * sap_material_number: SAP material SKU/code (e.g., ARFL100AM, GMB515BAM) if mentioned.
      * quantity: Order quantity.
@@ -185,7 +257,7 @@ First, determine the document context. It must be either "Sales Order" or "Vendo
 
 Return a JSON object structured exactly like this:
 {
-  "is_legit_invoice": boolean,
+  "is_legit_invoice": boolean, // MUST be set to true if the document is a valid Sales Order OR a valid Vendor Invoice. Set to false ONLY if the document is spam, junk, generic correspondence, a resume/CV, or completely unrelated to invoices or sales orders.
   "total_pages_detected": integer,
   "header": {
     "context": "Sales Order" | "Vendor Invoice",
@@ -280,7 +352,7 @@ app.post('/api/auth/signup', async (req, res) => {
     };
     users.push(newUser);
     await saveUsers(users);
-    
+
     const { password: _, ...userWithoutPassword } = newUser;
     res.json({ message: 'Account registered successfully. Please await administrator approval before signing in.', user: userWithoutPassword });
 });
@@ -305,7 +377,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (user.active === false) {
         return res.status(403).json({ detail: 'Account is deactivated' });
     }
-    
+
     const { password: _, ...userWithoutPassword } = user;
     res.json({ success: true, user: userWithoutPassword });
 });
@@ -348,13 +420,13 @@ app.put('/api/users/:id', async (req, res) => {
     if (idx === -1) {
         return res.status(404).json({ detail: 'User not found' });
     }
-    
+
     if (name !== undefined) users[idx].name = name;
     if (email !== undefined) users[idx].email = email.toLowerCase();
     if (role !== undefined) users[idx].role = role;
     if (active !== undefined) users[idx].active = active;
     if (approved !== undefined) users[idx].approved = approved;
-    
+
     await saveUsers(users);
     res.json({ message: 'User updated successfully', user: users[idx] });
 });
@@ -385,6 +457,554 @@ async function saveSettings(settings) {
     await storageService.saveFile('settings', 'settings.json', settings, true);
 }
 
+// ─── ODATA API REQUEST EXECUTOR ──────────────────────────────────
+
+async function executeODataRequest(config, relativePathAndQuery) {
+    const resolvedAuthType = config.auth_type || 'None';
+    let baseEndpoint = String(config.endpoint).trim();
+    
+    let fullUrl = baseEndpoint;
+    if (relativePathAndQuery) {
+        const endsWithSlash = baseEndpoint.endsWith('/');
+        const startsWithSlash = relativePathAndQuery.startsWith('/');
+        if (endsWithSlash && startsWithSlash) {
+            fullUrl = baseEndpoint + relativePathAndQuery.slice(1);
+        } else if (!endsWithSlash && !startsWithSlash) {
+            fullUrl = baseEndpoint + '/' + relativePathAndQuery;
+        } else {
+            fullUrl = baseEndpoint + relativePathAndQuery;
+        }
+    }
+
+    let headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    };
+
+    if (resolvedAuthType === 'OAuth2') {
+        const tokenUrl = String(config.oauth_token_url || '').trim();
+        const cId = String(config.client_id || '').trim();
+        const cSecret = String(config.client_secret || '').trim();
+
+        if (!tokenUrl || !cId || !cSecret) {
+            throw new Error('OAuth2 configuration is incomplete for API: ' + config.name);
+        }
+
+        console.log(`🔑 [executeODataRequest] Fetching OAuth2 token for ${config.name} from ${tokenUrl}...`);
+        const tokenParams = new URLSearchParams();
+        tokenParams.append('grant_type', 'client_credentials');
+        tokenParams.append('client_id', cId);
+        tokenParams.append('client_secret', cSecret);
+
+        let tokenRes = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: tokenParams
+        });
+
+        if (!tokenRes.ok) {
+            throw new Error(`OAuth2 token request failed with status ${tokenRes.status}`);
+        }
+
+        const tokenData = await tokenRes.json();
+        const bearerToken = tokenData.access_token || tokenData.token;
+        if (!bearerToken) {
+            throw new Error('OAuth2 token endpoint did not return an access token');
+        }
+
+        headers['Authorization'] = `Bearer ${bearerToken}`;
+    } else if (resolvedAuthType === 'API Key') {
+        const kName = config.key_name || 'X-API-Key';
+        const kValue = config.key_value;
+        if (kValue) {
+            headers[kName] = kValue;
+        }
+    } else if (resolvedAuthType === 'Basic Auth') {
+        const uName = config.username;
+        const pWord = config.password;
+        if (uName && pWord) {
+            const credentials = Buffer.from(`${uName}:${pWord}`).toString('base64');
+            headers['Authorization'] = `Basic ${credentials}`;
+        }
+    }
+
+    console.log(`📡 [executeODataRequest] Querying: ${fullUrl}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+    try {
+        const response = await fetch(fullUrl, {
+            method: 'GET',
+            headers: headers,
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`OData request failed with status ${response.status}: ${errText}`);
+        }
+
+        return await response.json();
+    } catch (e) {
+        clearTimeout(timeoutId);
+        throw e;
+    }
+}
+
+function resolvePricingForDocument(docData, settings) {
+    if (!docData || !docData.line_items) return docData;
+
+    const customerPrice = settings.customer_requested_price;
+    const useFormula = settings.calculate_price_formula !== false;
+    const formulaType = settings.price_formula_type || 'amount_times_qty';
+
+    docData.line_items = docData.line_items.map(item => {
+        let price = item.price || item.unit_price;
+        let pricingOrigin = item.pricing_origin || '';
+
+        // If no price is specified in the document
+        if (price === undefined || price === null || String(price).trim() === '') {
+            if (customerPrice && String(customerPrice).trim() !== '') {
+                price = String(customerPrice);
+                pricingOrigin = 'Settings: Customer Requested Price';
+            } else if (useFormula) {
+                const amount = parseFloat(item.amount || item.line_amount) || 0;
+                const qty = parseFloat(item.quantity) || 1;
+                
+                if (formulaType === 'amount_times_qty') {
+                    price = String((amount * qty).toFixed(2));
+                    pricingOrigin = 'Formula: Amount * Quantity';
+                } else if (formulaType === 'amount_divided_by_qty') {
+                    const divPrice = qty > 0 ? (amount / qty) : 0;
+                    price = String(divPrice.toFixed(2));
+                    pricingOrigin = 'Formula: Amount / Quantity';
+                }
+            }
+        }
+
+        if (price) {
+            item.price = price;
+            item.unit_price = price;
+            if (pricingOrigin) {
+                item.pricing_origin = pricingOrigin;
+            }
+        }
+        return item;
+    });
+
+    return docData;
+}
+
+async function uploadAttachmentToSAP(docId, sapDocNumber, docContext, isBtp, authDetails) {
+    const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
+    let ext = '.pdf';
+    let fileBuffer = null;
+    
+    for (const e of supportedExts) {
+        if (await storageService.existsFile('sap_docs', `${docId}${e}`)) {
+            ext = e;
+            break;
+        }
+    }
+    const filename = `${docId}${ext}`;
+    
+    try {
+        fileBuffer = await storageService.readFile('sap_docs', filename);
+    } catch (err) {
+        try {
+            fileBuffer = await storageService.readFile('downloads', filename);
+        } catch (innerErr) {
+            throw new Error(`Original attachment file ${filename} not found in storage.`);
+        }
+    }
+    
+    const mimeMap = {
+        '.pdf': 'application/pdf',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.doc': 'application/msword',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.xls': 'application/vnd.ms-excel',
+        '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        '.ppt': 'application/vnd.ms-powerpoint',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.tiff': 'image/tiff',
+        '.webp': 'image/webp',
+        '.txt': 'text/plain'
+    };
+    const mimeType = mimeMap[ext] || 'application/octet-stream';
+    
+    const normalizedContext = (docContext.toLowerCase().includes('invoice') || docContext.toLowerCase().includes('vendor')) ? 'VendorInvoice' : 'SalesOrder';
+    const businessObjectType = normalizedContext === 'SalesOrder' ? 'BUS2032' : 'BUS2081';
+    const sapObjectKey = String(sapDocNumber).padStart(10, '0');
+    
+    if (isBtp) {
+        const { accessToken, baseUrl } = authDetails;
+        const attachmentUrl = process.env.SAP_BTP_ATTACHMENT_URL || `${baseUrl.replace(/\/$/, '')}/sap/opu/odata/sap/API_CV_ATTACHMENT_SRV/AttachmentContentSet`;
+        
+        console.log(`🚀 [BTP] Uploading attachment ${filename} to SAP Attachment Service at: ${attachmentUrl}`);
+        
+        const headers = {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': mimeType,
+            'Slug': filename,
+            'BusinessObjectTypeName': businessObjectType,
+            'LinkedSAPObjectKey': sapObjectKey,
+            'Accept': 'application/json'
+        };
+        
+        const uploadResp = await fetch(attachmentUrl, {
+            method: 'POST',
+            headers,
+            body: fileBuffer
+        });
+        
+        const respText = await uploadResp.text();
+        if (!uploadResp.ok) {
+            throw new Error(`BTP Attachment upload returned Status ${uploadResp.status}: ${respText}`);
+        }
+        
+        console.log(`🎉 [BTP] Attachment uploaded successfully to SAP!`);
+        return respText;
+    } else {
+        const { authHeader, sapHost, sapPort, sapClient } = authDetails;
+        const BASE_URL = `http://${sapHost}:${sapPort}/sap/opu/odata/sap/API_CV_ATTACHMENT_SRV/`;
+        const TOKEN_URL = `${BASE_URL}?sap-client=${sapClient}`;
+        const POST_URL = `${BASE_URL}AttachmentContentSet?sap-client=${sapClient}`;
+        
+        console.log(`🔒 [SAP] Fetching CSRF Token for Attachment Service from: ${TOKEN_URL}`);
+        
+        const tokenResp = await fetch(TOKEN_URL, {
+            method: 'GET',
+            headers: {
+                'Authorization': authHeader,
+                'x-csrf-token': 'fetch',
+                'x-requested-with': 'X',
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (!tokenResp.ok) {
+            const errText = await tokenResp.text();
+            throw new Error(`Attachment Service CSRF Token Fetch Failed (Status ${tokenResp.status}): ${errText}`);
+        }
+        
+        const csrfToken = tokenResp.headers.get('x-csrf-token');
+        if (!csrfToken) {
+            throw new Error('CSRF Token not returned by SAP Attachment Service');
+        }
+        
+        const cookies = tokenResp.headers.get('set-cookie') || '';
+        console.log(`🚀 [SAP] Uploading attachment ${filename} to SAP Attachment Service at: ${POST_URL}`);
+        
+        const postHeaders = {
+            'Authorization': authHeader,
+            'x-csrf-token': csrfToken,
+            'Content-Type': mimeType,
+            'Slug': filename,
+            'BusinessObjectTypeName': businessObjectType,
+            'LinkedSAPObjectKey': sapObjectKey,
+            'Accept': 'application/json'
+        };
+        
+        if (cookies) {
+            postHeaders['Cookie'] = cookies;
+        }
+        
+        const uploadResp = await fetch(POST_URL, {
+            method: 'POST',
+            headers: postHeaders,
+            body: fileBuffer
+        });
+        
+        const respText = await uploadResp.text();
+        if (!uploadResp.ok) {
+            throw new Error(`SAP Attachment upload returned Status ${uploadResp.status}: ${respText}`);
+        }
+        
+        console.log(`🎉 [SAP] Attachment uploaded successfully to SAP!`);
+        return respText;
+    }
+}
+
+// ─── DYNAMIC API ENRICHMENT PIPELINE ──────────────────────────────
+
+async function enrichDocumentWithApis(docData) {
+    const settings = await getSettings();
+    docData = resolvePricingForDocument(docData, settings);
+    const apiConfigs = settings.api_configs || [];
+    
+    if (!docData.field_origins) {
+        docData.field_origins = {};
+    }
+    
+    const isSalesOrder = docData.header?.context === "Sales Order";
+    const custName = docData.header?.customer_name || '';
+    const emailMeta = docData.email_metadata || {};
+    const recipientEmail = emailMeta.recipient_email || '';
+    const matchingEmailConf = recipientEmail ? (settings.emails || []).find(e => e.email?.toLowerCase() === recipientEmail.toLowerCase()) : null;
+    
+    // Track base metadata origins
+    if (emailMeta.customer_name) {
+        docData.field_origins.customer_name = {
+            value: docData.header.customer_name,
+            source: "Gmail/Outlook Domain Settings"
+        };
+    } else {
+        docData.field_origins.customer_name = {
+            value: docData.header?.customer_name || 'N/A',
+            source: "AI Model Extraction"
+        };
+    }
+    
+    if (emailMeta.customer_address) {
+        docData.field_origins.customer_address = {
+            value: docData.header.customer_address,
+            source: "Gmail/Outlook Domain Settings (Sold-to Address)"
+        };
+    } else {
+        docData.field_origins.customer_address = {
+            value: docData.header?.customer_address || docData.header?.sold_to_address || 'N/A',
+            source: "AI Model Extraction"
+        };
+    }
+
+    if (isSalesOrder) {
+        docData.field_origins.sold_to_party_number = {
+            value: docData.header?.sold_to_party_number || 'N/A',
+            source: "AI Model Extraction"
+        };
+
+        // Sales organization
+        if (matchingEmailConf?.sales_org) {
+            docData.header.sales_organization = matchingEmailConf.sales_org;
+            docData.field_origins.sales_organization = {
+                value: matchingEmailConf.sales_org,
+                source: "Gmail/Outlook Connection Settings"
+            };
+        } else if (emailMeta.sales_org) {
+            docData.header.sales_organization = emailMeta.sales_org;
+            docData.field_origins.sales_organization = {
+                value: emailMeta.sales_org,
+                source: "Gmail/Outlook Ingestion Metadata"
+            };
+        } else {
+            docData.header.sales_organization = docData.header.sales_organization || "1010";
+            docData.field_origins.sales_organization = {
+                value: docData.header.sales_organization,
+                source: "Default Fallback"
+            };
+        }
+
+        // Distribution channel
+        if (matchingEmailConf?.distr_chan) {
+            docData.header.distribution_channel = matchingEmailConf.distr_chan;
+            docData.field_origins.distribution_channel = {
+                value: matchingEmailConf.distr_chan,
+                source: "Gmail/Outlook Connection Settings"
+            };
+        } else if (emailMeta.distr_chan) {
+            docData.header.distribution_channel = emailMeta.distr_chan;
+            docData.field_origins.distribution_channel = {
+                value: emailMeta.distr_chan,
+                source: "Gmail/Outlook Ingestion Metadata"
+            };
+        } else {
+            docData.header.distribution_channel = docData.header.distribution_channel || "01";
+            docData.field_origins.distribution_channel = {
+                value: docData.header.distribution_channel,
+                source: "Default Fallback"
+            };
+        }
+
+        // Division
+        if (matchingEmailConf?.division) {
+            docData.header.division = matchingEmailConf.division;
+            docData.field_origins.division = {
+                value: matchingEmailConf.division,
+                source: "Gmail/Outlook Connection Settings"
+            };
+        } else if (emailMeta.division) {
+            docData.header.division = emailMeta.division;
+            docData.field_origins.division = {
+                value: emailMeta.division,
+                source: "Gmail/Outlook Ingestion Metadata"
+            };
+        } else {
+            docData.header.division = docData.header.division || "01";
+            docData.field_origins.division = {
+                value: docData.header.division,
+                source: "Default Fallback"
+            };
+        }
+    } else {
+        docData.field_origins.supplier_number = {
+            value: docData.header?.supplier_number || 'N/A',
+            source: "AI Model Extraction"
+        };
+
+        // Company Code
+        if (matchingEmailConf?.company_code) {
+            docData.header.company_code = matchingEmailConf.company_code;
+            docData.field_origins.company_code = {
+                value: matchingEmailConf.company_code,
+                source: "Gmail/Outlook Connection Settings"
+            };
+        } else if (emailMeta.company_code) {
+            docData.header.company_code = emailMeta.company_code;
+            docData.field_origins.company_code = {
+                value: emailMeta.company_code,
+                source: "Gmail/Outlook Ingestion Metadata"
+            };
+        } else {
+            docData.header.company_code = docData.header.company_code || "1010";
+            docData.field_origins.company_code = {
+                value: docData.header.company_code,
+                source: "Default Fallback"
+            };
+        }
+    }
+    
+    // 1. Business Partner API Enrichment
+    const bpConfig = apiConfigs.find(c => c.status === 'Active' && c.context === 'BusinessPartner');
+    if (bpConfig && custName) {
+        try {
+            console.log(`📡 [API Enrichment] Querying Business Partner API for "${custName}"...`);
+            let query = `BusinessPartners?$filter=contains(BusinessPartnerName,'${encodeURIComponent(custName)}')&$expand=to_BusinessPartnerAddress,to_Customer`;
+            let bpResult;
+            try {
+                bpResult = await executeODataRequest(bpConfig, query);
+            } catch (err) {
+                console.warn(`OData contains filter failed for BP, trying direct fetch to filter locally: ${err.message}`);
+                bpResult = await executeODataRequest(bpConfig, `BusinessPartners?$expand=to_BusinessPartnerAddress,to_Customer&$top=100`);
+            }
+            
+            let records = bpResult?.value || bpResult?.d?.results || bpResult || [];
+            if (!Array.isArray(records) && records.results) records = records.results;
+            
+            let matchedRecord = records.find(r => 
+                String(r.BusinessPartnerName || r.OrganizationBPName1 || '').toLowerCase().includes(custName.toLowerCase()) ||
+                custName.toLowerCase().includes(String(r.BusinessPartnerName || r.OrganizationBPName1 || '').toLowerCase())
+            );
+            
+            if (!matchedRecord && records.length > 0) {
+                matchedRecord = records[0];
+            }
+            
+            if (matchedRecord) {
+                console.log(`✅ [API Enrichment] Found Business Partner match: ${matchedRecord.BusinessPartnerName || matchedRecord.BusinessPartner}`);
+                
+                let customerId = matchedRecord.BusinessPartner;
+                if (matchedRecord.to_Customer) {
+                    const custData = matchedRecord.to_Customer.results?.[0] || matchedRecord.to_Customer;
+                    if (custData && custData.Customer) {
+                        customerId = custData.Customer;
+                    }
+                }
+                
+                if (isSalesOrder) {
+                    docData.header.sold_to_party_number = customerId;
+                    docData.field_origins.sold_to_party_number = {
+                        value: customerId,
+                        source: `Business Partner API (${bpConfig.name}) - Customer ID`
+                    };
+                } else {
+                    docData.header.supplier_number = customerId;
+                    docData.field_origins.supplier_number = {
+                        value: customerId,
+                        source: `Business Partner API (${bpConfig.name}) - Vendor ID`
+                    };
+                }
+                
+                if (matchedRecord.to_BusinessPartnerAddress) {
+                    let addrList = matchedRecord.to_BusinessPartnerAddress.results || matchedRecord.to_BusinessPartnerAddress;
+                    if (!Array.isArray(addrList)) addrList = [addrList];
+                    
+                    const addr = addrList[0];
+                    if (addr) {
+                        const street = addr.StreetName || addr.Street || '';
+                        const city = addr.CityName || addr.City || '';
+                        const postal = addr.PostalCode || '';
+                        const country = addr.Country || '';
+                        const formattedAddr = [street, city, postal, country].filter(Boolean).join(', ');
+                        
+                        if (formattedAddr) {
+                            docData.header.customer_address = formattedAddr;
+                            docData.header.sold_to_address = formattedAddr;
+                            docData.field_origins.customer_address = {
+                                value: formattedAddr,
+                                source: `Business Partner API (${bpConfig.name}) - Address expanded`
+                            };
+                            docData.field_origins.sold_to_address = {
+                                value: formattedAddr,
+                                source: `Business Partner API (${bpConfig.name}) - Address expanded`
+                            };
+                        }
+                    }
+                }
+            } else {
+                console.log(`⚠️ [API Enrichment] No matching Business Partner found for "${custName}"`);
+            }
+        } catch (bpErr) {
+            console.error(`❌ [API Enrichment] Business Partner API lookup failed:`, bpErr.message);
+        }
+    }
+    
+    // 2. Customer Material Info API Enrichment
+    const matConfig = apiConfigs.find(c => c.status === 'Active' && c.context === 'CustomerMaterialInfo');
+    if (matConfig && docData.line_items && docData.line_items.length > 0) {
+        try {
+            console.log(`📡 [API Enrichment] Querying Customer Material Info API (CMIR)...`);
+            const matResult = await executeODataRequest(matConfig, 'CustMatRecords');
+            let records = matResult?.value || matResult?.d?.results || matResult || [];
+            if (!Array.isArray(records) && records.results) records = records.results;
+            
+            if (records.length > 0) {
+                if (!docData.line_item_origins) docData.line_item_origins = {};
+                
+                docData.line_items = docData.line_items.map((item, idx) => {
+                    const itemDesc = item.material_description || '';
+                    const itemCustMat = item.customer_material_number || item.supplier_material_number || '';
+                    
+                    let matchedMat = records.find(r => 
+                        itemCustMat && String(r.CustomerMaterial || r.Cust_mat || '').toLowerCase() === itemCustMat.toLowerCase()
+                    );
+                    
+                    if (!matchedMat) {
+                        matchedMat = records.find(r => 
+                            itemDesc && (
+                                String(r.MaterialDescription || r.Mat_desc || '').toLowerCase().includes(itemDesc.toLowerCase()) ||
+                                itemDesc.toLowerCase().includes(String(r.MaterialDescription || r.Mat_desc || '').toLowerCase())
+                            )
+                        );
+                    }
+                    
+                    if (matchedMat) {
+                        const sapMatNo = matchedMat.Material || matchedMat.Mat_no || matchedMat.MaterialNumber;
+                        console.log(`✅ [API Enrichment] Matched line item ${idx+1} ("${itemDesc}") to SAP Material SKU: ${sapMatNo}`);
+                        
+                        docData.line_item_origins[idx] = {
+                            sap_material_number: `Customer Material Info API (${matConfig.name}) - Matched via description/SKU`
+                        };
+                        
+                        return {
+                            ...item,
+                            sap_material_number: sapMatNo
+                        };
+                    }
+                    return item;
+                });
+            }
+        } catch (matErr) {
+            console.error(`❌ [API Enrichment] Customer Material Info API lookup failed:`, matErr.message);
+        }
+    }
+    
+    return docData;
+}
+
 // ─── SETTINGS ROUTES ─────────────────────────────────────────────
 
 app.get('/api/settings', async (req, res) => {
@@ -406,7 +1026,7 @@ app.get('/api/settings', async (req, res) => {
 app.post('/api/settings/email', async (req, res) => {
     const current = await getSettings();
     const update = req.body;
-    
+
     if (update.emails && Array.isArray(update.emails)) {
         const existingEmails = current.emails || [];
         update.emails = update.emails.map(e => {
@@ -417,7 +1037,7 @@ app.post('/api/settings/email', async (req, res) => {
             };
         });
     }
-    
+
     Object.assign(current, update);
     await saveSettings(current);
     res.json({ message: 'Email settings updated successfully' });
@@ -426,10 +1046,10 @@ app.post('/api/settings/email', async (req, res) => {
 app.post('/api/settings/ai', async (req, res) => {
     const { provider, api_key, model } = req.body;
     const current = await getSettings();
-    
+
     let providerKey = provider.toLowerCase();
     if (providerKey === 'claude') providerKey = 'anthropic';
-    
+
     const keyName = `${providerKey}_api_key`;
     if (api_key !== undefined && api_key !== '********') {
         current[keyName] = api_key;
@@ -481,6 +1101,26 @@ app.post('/api/settings/mappings', async (req, res) => {
     }
 });
 
+app.post('/api/settings/pricing', async (req, res) => {
+    try {
+        const { customer_requested_price, calculate_price_formula, price_formula_type } = req.body;
+        const current = await getSettings();
+        current.customer_requested_price = customer_requested_price;
+        current.calculate_price_formula = calculate_price_formula !== undefined ? calculate_price_formula : true;
+        current.price_formula_type = price_formula_type || 'amount_times_qty';
+        await saveSettings(current);
+        res.json({ 
+            success: true, 
+            message: 'Pricing settings saved successfully', 
+            customer_requested_price: current.customer_requested_price,
+            calculate_price_formula: current.calculate_price_formula,
+            price_formula_type: current.price_formula_type
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/settings/test-email', (req, res) => {
     const { user_email, app_password, imap_server } = req.body;
     const imap = new Imap({
@@ -523,7 +1163,7 @@ app.get('/api/api-configs', async (req, res) => {
 app.post('/api/api-configs', async (req, res) => {
     const settings = await getSettings();
     if (!settings.api_configs) settings.api_configs = [];
-    
+
     const newConfig = {
         id: Date.now(),
         name: req.body.name,
@@ -541,7 +1181,7 @@ app.post('/api/api-configs', async (req, res) => {
         status: 'Active',
         created_at: new Date().toISOString()
     };
-    
+
     settings.api_configs.push(newConfig);
     await saveSettings(settings);
     res.status(201).json(newConfig);
@@ -552,14 +1192,14 @@ app.put('/api/api-configs/:id', async (req, res) => {
     const configs = settings.api_configs || [];
     const id = Number(req.params.id);
     const index = configs.findIndex(c => c.id === id);
-    
+
     if (index === -1) {
         return res.status(404).json({ detail: 'API Configuration not found' });
     }
-    
+
     const current = configs[index];
     const update = req.body;
-    
+
     // Update fields, preserving secrets if sent as masked
     const updated = {
         ...current,
@@ -576,7 +1216,7 @@ app.put('/api/api-configs/:id', async (req, res) => {
         password: (update.password && update.password !== '********') ? update.password : current.password,
         key_value: (update.key_value && update.key_value !== '********') ? update.key_value : current.key_value
     };
-    
+
     configs[index] = updated;
     settings.api_configs = configs;
     await saveSettings(settings);
@@ -587,14 +1227,14 @@ app.delete('/api/api-configs/:id', async (req, res) => {
     const settings = await getSettings();
     let configs = settings.api_configs || [];
     const id = Number(req.params.id);
-    
+
     const initialLength = configs.length;
     configs = configs.filter(c => c.id !== id);
-    
+
     if (configs.length === initialLength) {
         return res.status(404).json({ detail: 'API Configuration not found' });
     }
-    
+
     settings.api_configs = configs;
     await saveSettings(settings);
     res.json({ message: 'API Configuration deleted successfully' });
@@ -605,16 +1245,16 @@ app.post('/api/api-configs/test', async (req, res) => {
     if (!endpoint) {
         return res.status(400).json({ status: 'error', message: 'Endpoint URL is required' });
     }
-    
+
     // Find stored configuration to get unmasked secrets
     const settings = await getSettings();
     const storedConfig = (settings.api_configs || []).find(c => c.id === id || c.endpoint === endpoint) || {};
-    
+
     const resolvedAuthType = auth_type || storedConfig.auth_type || 'None';
     const resolvedEndpoint = String(endpoint).trim();
-    
+
     let headers = {};
-    
+
     try {
         if (resolvedAuthType === 'OAuth2') {
             const tokenUrl = String(oauth_token_url || storedConfig.oauth_token_url || '').trim();
@@ -623,11 +1263,11 @@ app.post('/api/api-configs/test', async (req, res) => {
             if (cSecret === '********' && storedConfig.client_secret) {
                 cSecret = storedConfig.client_secret;
             }
-            
+
             if (!tokenUrl || !cId || !cSecret) {
                 return res.json({ status: 'error', message: 'OAuth2 configuration is incomplete (OAuth Token URL, Client ID, and Client Secret are required)' });
             }
-            
+
             console.log(`🔑 Fetching OAuth2 token from ${tokenUrl}...`);
             // Try POST form-encoded
             let tokenRes;
@@ -653,18 +1293,18 @@ app.post('/api/api-configs/test', async (req, res) => {
                     })
                 });
             }
-            
+
             if (!tokenRes.ok) {
                 const errText = await tokenRes.text();
                 return res.json({ status: 'error', message: `OAuth2 token request failed: Status ${tokenRes.status} - ${errText}` });
             }
-            
+
             const tokenData = await tokenRes.json();
             const bearerToken = tokenData.access_token || tokenData.token;
             if (!bearerToken) {
                 return res.json({ status: 'error', message: 'OAuth2 token endpoint did not return an access_token in the response' });
             }
-            
+
             headers['Authorization'] = `Bearer ${bearerToken}`;
         } else if (resolvedAuthType === 'API Key') {
             const kName = key_name || storedConfig.key_name || 'X-API-Key';
@@ -686,27 +1326,27 @@ app.post('/api/api-configs/test', async (req, res) => {
                 headers['Authorization'] = `Basic ${credentials}`;
             }
         }
-        
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
-        
+
         console.log(`🌐 Calling primary API endpoint ${resolvedEndpoint}...`);
-        const testRes = await fetch(resolvedEndpoint, { 
+        const testRes = await fetch(resolvedEndpoint, {
             method: 'GET',
             headers: headers,
-            signal: controller.signal 
+            signal: controller.signal
         });
         clearTimeout(timeoutId);
-        
-        res.json({ 
-            status: 'success', 
-            statusCode: testRes.status, 
-            message: `Connected successfully (Status: ${testRes.status})` 
+
+        res.json({
+            status: 'success',
+            statusCode: testRes.status,
+            message: `Connected successfully (Status: ${testRes.status})`
         });
     } catch (e) {
-        res.json({ 
-            status: 'error', 
-            message: e.name === 'AbortError' ? 'Connection timed out' : e.message 
+        res.json({
+            status: 'error',
+            message: e.name === 'AbortError' ? 'Connection timed out' : e.message
         });
     }
 });
@@ -722,7 +1362,7 @@ app.post('/api/api-configs/fetch-schema', async (req, res) => {
 
     const resolvedAuthType = auth_type || storedConfig.auth_type || 'None';
     let resolvedEndpoint = String(endpoint).trim();
-    
+
     // Attempt to append OData parameters to limit to 1 record to save bandwidth/speed
     if (!resolvedEndpoint.includes('$top=') && !resolvedEndpoint.includes('limit=')) {
         const separator = resolvedEndpoint.includes('?') ? '&' : '?';
@@ -744,7 +1384,7 @@ app.post('/api/api-configs/fetch-schema', async (req, res) => {
             if (!tokenUrl || !cId || !cSecret) {
                 return res.json({ status: 'error', message: 'OAuth2 configuration is incomplete' });
             }
-            
+
             let tokenRes;
             try {
                 tokenRes = await fetch(tokenUrl, {
@@ -767,7 +1407,7 @@ app.post('/api/api-configs/fetch-schema', async (req, res) => {
                     })
                 });
             }
-            
+
             if (!tokenRes.ok) {
                 return res.json({ status: 'error', message: `OAuth2 token request failed: Status ${tokenRes.status}` });
             }
@@ -800,21 +1440,21 @@ app.post('/api/api-configs/fetch-schema', async (req, res) => {
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
-        
+
         console.log(`🌐 Querying schema from ${resolvedEndpoint}...`);
-        const queryRes = await fetch(resolvedEndpoint, { 
+        const queryRes = await fetch(resolvedEndpoint, {
             method: 'GET',
             headers: headers,
-            signal: controller.signal 
+            signal: controller.signal
         });
         clearTimeout(timeoutId);
-        
+
         if (!queryRes.ok) {
             return res.json({ status: 'error', message: `Endpoint returned HTTP ${queryRes.status}` });
         }
-        
+
         const responseData = await queryRes.json();
-        
+
         // Find the record object
         let record = null;
         if (responseData) {
@@ -830,11 +1470,11 @@ app.post('/api/api-configs/fetch-schema', async (req, res) => {
                 record = responseData;
             }
         }
-        
+
         if (!record) {
             return res.json({ status: 'error', message: 'No records or objects could be found in the response' });
         }
-        
+
         // Extract flat keys, ignoring OData / metadata fields
         const keys = Object.keys(record).filter(key => {
             const val = record[key];
@@ -842,18 +1482,18 @@ app.post('/api/api-configs/fetch-schema', async (req, res) => {
             const isPrimitive = typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val === null;
             return !isMeta && isPrimitive;
         });
-        
+
         const fields = keys.map(k => ({
             id: k,
             label: k,
             desc: `Fetched key: ${k}`
         }));
-        
+
         res.json({ status: 'success', fields });
     } catch (e) {
-        res.json({ 
-            status: 'error', 
-            message: e.name === 'AbortError' ? 'Connection timed out' : e.message 
+        res.json({
+            status: 'error',
+            message: e.name === 'AbortError' ? 'Connection timed out' : e.message
         });
     }
 });
@@ -948,12 +1588,28 @@ app.get('/api/auth/callback', async (req, res) => {
         });
 
         const current = await getSettings();
+
+        let refreshToken = '';
+        try {
+            const cacheString = msalApp.getTokenCache().serialize();
+            const cacheData = JSON.parse(cacheString);
+            if (cacheData && cacheData.RefreshToken) {
+                const rtKeys = Object.keys(cacheData.RefreshToken);
+                if (rtKeys.length > 0) {
+                    refreshToken = cacheData.RefreshToken[rtKeys[0]].secret || '';
+                }
+            }
+        } catch (cacheErr) {
+            console.error('⚠️ [OUTLOOK] Failed to extract refresh token from MSAL cache:', cacheErr.message);
+        }
+
         current.outlook_tokens = {
             access_token: result.accessToken,
-            refresh_token: result.refreshToken || result.tokenCache?.serialize?.() || '',
+            refresh_token: refreshToken || result.refreshToken || '',
             expires_at: (Date.now() / 1000) + (result.expiresOn ? (result.expiresOn.getTime() - Date.now()) / 1000 : 3600),
             user_principal_name: result.account?.username || '',
         };
+        current.msal_cache = msalApp.getTokenCache().serialize();
         current.active_source = 'Outlook';
         await saveSettings(current);
 
@@ -977,12 +1633,12 @@ app.get('/api/documents', async (req, res) => {
             try {
                 const data = await storageService.readFile('sap_json', f, true);
                 const docId = path.parse(f).name;
-                
+
                 if (!data.human_readable_id) {
                     data.human_readable_id = getHumanReadableId(docId);
-                    storageService.saveFile('sap_json', f, data, true).catch(() => {});
+                    storageService.saveFile('sap_json', f, data, true).catch(() => { });
                 }
-                
+
                 let ext = '.pdf';
                 for (const e of supportedExts) {
                     if (await storageService.existsFile('sap_docs', `${docId}${e}`)) {
@@ -1046,11 +1702,82 @@ app.get('/api/documents', async (req, res) => {
     res.json(docs);
 });
 
+// ─── GET SINGLE DOCUMENT DETAILS ──────────────────────────────────
+
+app.get('/api/documents/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
+        
+        let docData = null;
+        let isPending = false;
+        let ext = '.pdf';
+
+        // Check in sap_json
+        if (await storageService.existsFile('sap_json', `${id}.json`)) {
+            docData = await storageService.readFile('sap_json', `${id}.json`, true);
+            isPending = false;
+            for (const e of supportedExts) {
+                if (await storageService.existsFile('sap_docs', `${id}${e}`)) {
+                    ext = e;
+                    break;
+                }
+            }
+        } 
+        // Check in downloads
+        else {
+            const allFiles = await storageService.listFiles('downloads', '');
+            const matchingFile = allFiles.find(f => path.parse(f).name === id);
+            if (matchingFile) {
+                ext = path.extname(matchingFile).toLowerCase();
+                isPending = true;
+
+                let emailMeta = {};
+                const metaFilename = id + '.json';
+                if (await storageService.existsFile('metadata', metaFilename)) {
+                    try {
+                        emailMeta = await storageService.readFile('metadata', metaFilename, true);
+                    } catch { /* skip */ }
+                }
+
+                docData = {
+                    human_readable_id: getHumanReadableId(id),
+                    email_metadata: emailMeta,
+                    header: { context: Object.keys(emailMeta).length ? 'Ingested' : 'Local File', supplier_name: 'AI Analyzing...' },
+                    totals: { currency: '', total_amount: 'Pending' },
+                };
+            }
+        }
+
+        if (!docData) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+
+        // Apply OData integrations and domain configs dynamically
+        if (!isPending && docData.status !== 'success' && docData.status !== 'Success') {
+            docData = await enrichDocumentWithApis(docData);
+        }
+
+        res.json({
+            id: id,
+            data: docData,
+            status: docData.status || (isPending ? 'in_progress' : 'ready_to_send'),
+            is_legit: !isPending,
+            is_pending: isPending,
+            extension: ext,
+            filename: `${id}${ext}`
+        });
+    } catch (err) {
+        console.error(`Error fetching document details for ${req.params.id}:`, err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.delete('/api/documents/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const isForce = req.query.force === 'true';
-        
+
         if (isForce) {
             console.log(`🧹 [API] Permanently deleting document: ${id}`);
             const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
@@ -1060,12 +1787,12 @@ app.delete('/api/documents/:id', async (req, res) => {
             await storageService.deleteFile('trash_json', `${id}.json`);
             return res.json({ success: true, message: `Document ${id} permanently deleted` });
         }
-        
+
         console.log(`🗑️ [API] Soft deleting document: ${id}`);
         let docData = {};
         let ext = '.pdf';
         const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
-        
+
         if (await storageService.existsFile('sap_json', `${id}.json`)) {
             docData = await storageService.readFile('sap_json', `${id}.json`, true);
             for (const e of supportedExts) {
@@ -1084,15 +1811,15 @@ app.delete('/api/documents/:id', async (req, res) => {
                     break;
                 }
             }
-            
+
             let emailMeta = {};
             if (await storageService.existsFile('metadata', `${id}.json`)) {
                 try {
                     emailMeta = await storageService.readFile('metadata', `${id}.json`, true);
-                } catch {}
+                } catch { }
                 await storageService.deleteFile('metadata', `${id}.json`);
             }
-            
+
             docData = {
                 human_readable_id: getHumanReadableId(id),
                 email_metadata: emailMeta,
@@ -1101,12 +1828,12 @@ app.delete('/api/documents/:id', async (req, res) => {
                 status: 'in_progress'
             };
         }
-        
+
         docData.deleted_at = new Date().toISOString();
         docData.original_status = docData.status || 'ready_to_send';
         docData.status = 'deleted';
         docData.original_ext = ext;
-        
+
         await storageService.saveFile('trash_json', `${id}.json`, docData, true);
         res.json({ success: true, message: `Document ${id} successfully moved to Recycle Bin` });
     } catch (e) {
@@ -1132,7 +1859,7 @@ app.get('/api/documents/deleted', async (req, res) => {
                     deleted_at: data.deleted_at,
                     filename: `${docId}${data.original_ext || '.pdf'}`
                 });
-            } catch {}
+            } catch { }
         }
         docs.sort((a, b) => new Date(b.deleted_at).getTime() - new Date(a.deleted_at).getTime());
         res.json(docs);
@@ -1147,16 +1874,16 @@ app.post('/api/documents/:id/restore', async (req, res) => {
         if (!(await storageService.existsFile('trash_json', `${id}.json`))) {
             return res.status(404).json({ error: 'Document not found in Recycle Bin' });
         }
-        
+
         const data = await storageService.readFile('trash_json', `${id}.json`, true);
         const originalStatus = data.original_status || 'ready_to_send';
         const ext = data.original_ext || '.pdf';
-        
+
         data.status = originalStatus;
         delete data.deleted_at;
         delete data.original_status;
         delete data.original_ext;
-        
+
         if (originalStatus === 'in_progress') {
             await storageService.moveFile('trash_docs', 'downloads', `${id}${ext}`);
             if (data.email_metadata && Object.keys(data.email_metadata).length > 0) {
@@ -1166,7 +1893,7 @@ app.post('/api/documents/:id/restore', async (req, res) => {
             await storageService.moveFile('trash_docs', 'sap_docs', `${id}${ext}`);
             await storageService.saveFile('sap_json', `${id}.json`, data, true);
         }
-        
+
         await storageService.deleteFile('trash_json', `${id}.json`);
         res.json({ success: true, message: `Document ${id} successfully restored` });
     } catch (e) {
@@ -1186,13 +1913,13 @@ app.get('/api/duplicates', async (req, res) => {
                 if (data.status !== 'deleted' && !data.override_duplicate) {
                     docs.push({ id: docId, data, status: data.status || 'ready_to_send' });
                 }
-            } catch {}
+            } catch { }
         }
 
         const settings = await getSettings();
         const keywords = settings.email_body_keywords || [];
         const duplicates = [];
-        
+
         const getDocIdentifiers = (h) => {
             if (!h) return [];
             const ids = [
@@ -1208,33 +1935,33 @@ app.get('/api/duplicates', async (req, res) => {
         for (let i = 0; i < docs.length; i++) {
             const doc = docs[i];
             const data = doc.data;
-            
+
             const ids1 = getDocIdentifiers(data.header);
             const supplier1 = data.header?.supplier_name || data.header?.customer_name || 'Unknown';
             const date1 = data.header?.invoice_date || data.header?.po_date || data.header?.order_received_date || '';
             const amount1 = data.totals?.total_amount || '';
             const currency1 = data.totals?.currency || 'USD';
-            
+
             for (let j = 0; j < docs.length; j++) {
                 if (i === j) continue;
                 const otherDoc = docs[j];
                 const otherData = otherDoc.data;
-                
+
                 const ids2 = getDocIdentifiers(otherData.header);
                 const supplier2 = otherData.header?.supplier_name || otherData.header?.customer_name || 'Unknown';
                 const date2 = otherData.header?.invoice_date || otherData.header?.po_date || otherData.header?.order_received_date || '';
                 const amount2 = otherData.totals?.total_amount || '';
                 const currency2 = otherData.totals?.currency || 'USD';
-                
+
                 const hasIdOverlap = ids1.length > 0 && ids2.length > 0 && ids1.some(id => ids2.includes(id));
-                const isSupplierMatch = supplier1 !== 'Unknown' && supplier2 !== 'Unknown' && 
+                const isSupplierMatch = supplier1 !== 'Unknown' && supplier2 !== 'Unknown' &&
                     supplier1.toLowerCase().trim() === supplier2.toLowerCase().trim();
                 const isDateMatch = date1 !== '' && date2 !== '' && date1 === date2;
                 const isAmountMatch = amount1 !== '' && amount2 !== '' && parseFloat(amount1) === parseFloat(amount2);
-                
+
                 let isDuplicate = false;
                 let matchConfidence = 50;
-                
+
                 if (hasIdOverlap) {
                     isDuplicate = true;
                     matchConfidence = 80;
@@ -1245,22 +1972,22 @@ app.get('/api/duplicates', async (req, res) => {
                     isDuplicate = true;
                     matchConfidence = 75;
                 }
-                
+
                 if (isDuplicate) {
                     const matchedKeyword = keywords.find(kw => {
                         const s1 = `${data.body || ''} ${data.subject || ''} ${data.email_metadata?.body || ''} ${data.email_metadata?.subject || ''}`.toLowerCase();
                         const s2 = `${otherData.body || ''} ${otherData.subject || ''} ${otherData.email_metadata?.body || ''} ${otherData.email_metadata?.subject || ''}`.toLowerCase();
                         return s1.includes(kw.toLowerCase()) || s2.includes(kw.toLowerCase());
                     });
-                    
+
                     const hasKeyword = !!matchedKeyword;
                     if (hasKeyword) {
                         matchConfidence = Math.min(100, matchConfidence + 10);
                     }
-                    
+
                     const hrId = data.human_readable_id || getHumanReadableId(doc.id);
                     const otherHrId = otherData.human_readable_id || getHumanReadableId(otherDoc.id);
-                    
+
                     duplicates.push({
                         id: doc.id,
                         human_readable_id: hrId,
@@ -1295,7 +2022,7 @@ app.put('/api/documents/:id', async (req, res) => {
     try {
         const { id } = req.params;
         console.log(`📝 [API] Request to update document: ${id}`);
-        
+
         let docData = {};
         try {
             if (await storageService.existsFile('sap_json', `${id}.json`)) {
@@ -1304,7 +2031,7 @@ app.put('/api/documents/:id', async (req, res) => {
         } catch (err) {
             console.warn(`Could not read existing sap_json file for ${id}, creating new one.`);
         }
-        
+
         docData.header = { ...(docData.header || {}), ...(req.body.header || {}) };
         docData.totals = { ...(docData.totals || {}), ...(req.body.totals || {}) };
         if (req.body.line_items) {
@@ -1319,7 +2046,7 @@ app.put('/api/documents/:id', async (req, res) => {
         if (req.body.override_duplicate !== undefined) {
             docData.override_duplicate = req.body.override_duplicate;
         }
-        
+
         if (!docData.human_readable_id) {
             docData.human_readable_id = getHumanReadableId(id);
         }
@@ -1336,8 +2063,8 @@ app.get('/api/sap-btp/sales-orders', async (req, res) => {
         console.log(`🔍 [BTP] Fetching Live Sales Orders from SAP BTP...`);
         const settings = await getSettings();
         const apiConfigs = settings.api_configs || [];
-        const btpConfig = apiConfigs.find(c => 
-            c.status === 'Active' && 
+        const btpConfig = apiConfigs.find(c =>
+            c.status === 'Active' &&
             (c.auth_type === 'OAuth2' || c.name?.toLowerCase().includes('btp') || c.name?.toLowerCase().includes('sap') || c.endpoint?.includes('/odata/v4/sales-order'))
         );
 
@@ -1387,9 +2114,9 @@ app.get('/api/sap-btp/sales-orders', async (req, res) => {
 
         if (!tokenResp.ok) {
             const errText = await tokenResp.text();
-            return res.status(tokenResp.status).json({ 
-                error: `BTP OAuth Token exchange failed: Status ${tokenResp.status}`, 
-                details: errText 
+            return res.status(tokenResp.status).json({
+                error: `BTP OAuth Token exchange failed: Status ${tokenResp.status}`,
+                details: errText
             });
         }
 
@@ -1414,9 +2141,9 @@ app.get('/api/sap-btp/sales-orders', async (req, res) => {
         const queryText = await queryResp.text();
 
         if (!queryResp.ok) {
-            return res.status(queryResp.status).json({ 
-                error: `SAP BTP OData service returned Status ${queryResp.status}`, 
-                details: queryText 
+            return res.status(queryResp.status).json({
+                error: `SAP BTP OData service returned Status ${queryResp.status}`,
+                details: queryText
             });
         }
 
@@ -1442,27 +2169,51 @@ app.get('/api/sap-btp/sales-orders', async (req, res) => {
 });
 
 function getHumanReadableId(docId) {
-    if (!docId) return 'DOC-00000';
-    let hash = 0;
-    for (let i = 0; i < docId.length; i++) {
-        hash = (hash << 5) - hash + docId.charCodeAt(i);
-        hash |= 0;
+    if (!docId) return '1';
+    try {
+        const settingsPath = path.join(__dirname, 'settings.json');
+        let settings = {};
+        if (fs.existsSync(settingsPath)) {
+            settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        }
+        if (!settings.serial_number_map) {
+            settings.serial_number_map = {};
+        }
+        if (settings.serial_number_map[docId]) {
+            return String(settings.serial_number_map[docId]);
+        }
+
+        // Find maximum serial number currently assigned
+        const vals = Object.values(settings.serial_number_map);
+        const maxVal = vals.length > 0 ? Math.max(...vals) : 0;
+        const nextVal = maxVal + 1;
+
+        settings.serial_number_map[docId] = nextVal;
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4));
+        return String(nextVal);
+    } catch (err) {
+        console.error("Error in getHumanReadableId:", err);
+        // Fallback to simple hash-based numeric ID if file read/write fails
+        let hash = 0;
+        for (let i = 0; i < docId.length; i++) {
+            hash = (hash << 5) - hash + docId.charCodeAt(i);
+            hash |= 0;
+        }
+        return String(Math.abs(hash) % 100000);
     }
-    const numericId = Math.abs(hash) % 100000;
-    return `DOC-${String(numericId).padStart(5, '0')}`;
 }
 
 function buildSAPPayload(docData, settings) {
     const apiConfigs = settings.api_configs || [];
-    
+
     // Determine the document context
     const docContext = docData.header?.context || docData.email_metadata?.expected_doc_type || 'SalesOrder';
     const normalizedDocContext = (docContext.toLowerCase().includes('invoice') || docContext.toLowerCase().includes('vendor')) ? 'VendorInvoice' : 'SalesOrder';
-    
+
     // Find active config for this context, or fallback to any active config
-    const btpConfig = apiConfigs.find(c => c.status === 'Active' && c.context === normalizedDocContext) || 
-                      apiConfigs.find(c => c.status === 'Active');
-                      
+    const btpConfig = apiConfigs.find(c => c.status === 'Active' && c.context === normalizedDocContext) ||
+        apiConfigs.find(c => c.status === 'Active');
+
     const SAP_BTP_ENABLED = (process.env.SAP_BTP_ENABLED === "true") || !!btpConfig;
 
     const formatSAPDate = (dateStr) => {
@@ -1488,37 +2239,39 @@ function buildSAPPayload(docData, settings) {
     // ─── DYNAMIC PER-CONNECTION SCHEMA MAPPING ────────────────────
     if (btpConfig && btpConfig.mappings && btpConfig.mappings.length > 0) {
         console.log(`🔌 [SAP] Generating dynamic payload using custom mappings for API config: "${btpConfig.name}" (Context: ${btpConfig.context})`);
-        
+
         const payload = {};
-        
+
         // Define default values for standard fields if not mapped
         if (btpConfig.context === 'SalesOrder') {
             payload.SalesOrderType = "OR1";
-            payload.SalesOrganization = "1010";
-            payload.DistributionChannel = "01";
-            payload.OrganizationDivision = "01";
+            payload.SalesOrganization = docData.header?.sales_organization || "1010";
+            payload.DistributionChannel = docData.header?.distribution_channel || "01";
+            payload.OrganizationDivision = docData.header?.division || "01";
+        } else {
+            payload.CompanyCode = docData.header?.company_code || "1010";
         }
-        
+
         // Header & Footer mapping
         btpConfig.mappings.forEach(m => {
             const isItemSource = ["item_number", "customer_material_number", "material_description", "sap_material_number", "quantity", "unit_of_measure", "price", "amount", "tax", "supplier_material_number"].includes(m.sourceField);
             if (!isItemSource) {
                 let val = docData.header?.[m.sourceField] || docData.totals?.[m.sourceField] || "";
-                
+
                 // Format dates if the target field indicates it's a date
                 if (m.targetField.toLowerCase().includes('date') && val) {
                     val = SAP_BTP_ENABLED ? formatBTPDate(val) : formatSAPDate(val);
                 }
-                
+
                 // Special check for SoldToParty / Supplier length limits
                 if (['SoldToParty', 'Supplier', 'Sold_to_party', 'SupplierName'].includes(m.targetField)) {
                     if (String(val).length > 10) val = "BP-CUST";
                 }
-                
+
                 payload[m.targetField] = val;
             }
         });
-        
+
         // Line items mapping
         const lineItems = (docData.line_items || []).map((item, index) => {
             const itemPayload = {};
@@ -1533,29 +2286,40 @@ function buildSAPPayload(docData, settings) {
                 itemPayload.Quantity = "1";
                 itemPayload.UnitOfMeasure = "EA";
             }
-            
+
             btpConfig.mappings.forEach(m => {
                 const isItemSource = ["item_number", "customer_material_number", "material_description", "sap_material_number", "quantity", "unit_of_measure", "price", "amount", "tax", "supplier_material_number"].includes(m.sourceField);
                 if (isItemSource) {
                     let val = item[m.sourceField] || "";
-                    
-                    if ((m.targetField === 'Material' || m.targetField === 'Material1') && item.material_description) {
-                        val = extractMaterial(item.material_description, "ARFL100AM");
+
+                    if (m.targetField === 'Material' || m.targetField === 'Material1') {
+                        if (m.sourceField === 'material_description') {
+                            val = extractMaterial(val, "");
+                        }
+                        if (!val) {
+                            val = item.sap_material_number || item.customer_material_number || item.supplier_material_number || "";
+                        }
+                        if (!val && item.material_description) {
+                            val = extractMaterial(item.material_description, "ARFL100AM");
+                        }
+                        if (!val) {
+                            val = "ARFL100AM";
+                        }
                     }
                     if (m.targetField === 'RequestedQuantity' || m.targetField === 'Quantity') {
                         val = String(Math.round(parseFloat(val) || 1));
                     }
-                    
+
                     itemPayload[m.targetField] = val;
                 }
             });
             return itemPayload;
         });
-        
+
         // Nest line items under the standard key depending on OData/BTP vs RFC/Local
         const itemKey = SAP_BTP_ENABLED ? 'to_Item' : 'Navi_Sales_Mat';
         payload[itemKey] = lineItems;
-        
+
         return payload;
     }
 
@@ -1563,7 +2327,7 @@ function buildSAPPayload(docData, settings) {
     const poDate = docData.header?.order_received_date || docData.header?.requested_date || docData.header?.invoice_date || docData.header?.po_date || "";
     const poNum = docData.header?.customer_po_number || docData.header?.po_number || docData.header?.purchase_order_number || docData.header?.order_reference || "AUTO_PO";
     const currency = docData.totals?.currency || "USD";
-    const partnerName = docData.header?.supplier_name || "BP-CUST"; 
+    const partnerName = docData.header?.supplier_name || "BP-CUST";
     const paymentTerms = docData.header?.payment_terms || "0001";
     const incoTerms = docData.header?.inco_terms || "FOB";
     const soldToParty = String(docData.header?.sold_to_party_number || docData.header?.supplier_number || partnerName || "BP-CUST").trim();
@@ -1578,7 +2342,7 @@ function buildSAPPayload(docData, settings) {
             const itemNum = item.item_number || String((index + 1) * 10);
             const qty = String(Math.round(parseFloat(item.quantity) || 1));
             const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
-            const material = extractMaterial(item.material_description, defaultMat);
+            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, defaultMat);
             const uom = item.unit_of_measure || "EA";
 
             return {
@@ -1607,9 +2371,9 @@ function buildSAPPayload(docData, settings) {
 
         return {
             SalesOrderType: "OR1",
-            SalesOrganization: "1010",
-            DistributionChannel: "01",
-            OrganizationDivision: "01",
+            SalesOrganization: docData.header?.sales_organization || "1010",
+            DistributionChannel: docData.header?.distribution_channel || "01",
+            OrganizationDivision: docData.header?.division || "01",
             SoldToParty: btpSoldTo,
             PurchaseOrderByCustomer: poNum,
             SalesOrderDate: btpDate,
@@ -1632,7 +2396,7 @@ function buildSAPPayload(docData, settings) {
             const qty = String(Math.round(parseFloat(item.quantity) || 1));
             const price = String(Math.round(parseFloat(item.price || item.unit_price) || 0));
             const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
-            const material = extractMaterial(item.material_description, defaultMat);
+            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, defaultMat);
             const uom = item.unit_of_measure || "EA";
 
             return {
@@ -1660,9 +2424,9 @@ function buildSAPPayload(docData, settings) {
 
         return {
             Doc_typ: "OR1",
-            Sales_org: "1010",
-            Distr_chan: "01",
-            Division: "01",
+            Sales_org: docData.header?.sales_organization || "1010",
+            Distr_chan: docData.header?.distribution_channel || "01",
+            Division: docData.header?.division || "01",
             Sold_to_party: soldToParty.length > 10 ? "BP-CUST" : soldToParty,
             Ship_to_party: shipToParty.length > 10 ? "BP-CUST" : shipToParty,
             Bill_to_party: soldToParty.length > 10 ? "BP-CUST" : soldToParty,
@@ -1680,6 +2444,7 @@ function buildSAPPayload(docData, settings) {
         };
     }
 }
+
 
 app.get('/api/documents/:id/sap-payload', async (req, res) => {
     try {
@@ -1704,6 +2469,55 @@ app.get('/api/documents/:id/sap-payload', async (req, res) => {
     }
 });
 
+app.post('/api/documents/:id/reparse', async (req, res) => {
+    try {
+        const { id } = req.params;
+        console.log(`🔄 [AI] Manually triggered re-parse for document: ${id}`);
+
+        let docData;
+        try {
+            docData = await storageService.readFile('sap_json', `${id}.json`, true);
+        } catch {
+            return res.status(404).json({ error: "Document data not found" });
+        }
+
+        const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
+        let ext = '.pdf';
+        for (const e of supportedExts) {
+            if (await storageService.existsFile('sap_docs', `${id}${e}`)) {
+                ext = e;
+                break;
+            }
+        }
+
+        const fname = `${id}${ext}`;
+        const metaFilename = `${id}.json`;
+
+        // Move files back to downloads and metadata
+        await storageService.moveFile('sap_docs', 'downloads', fname);
+        if (docData.email_metadata) {
+            await storageService.saveFile('metadata', metaFilename, docData.email_metadata, true);
+        }
+
+        // Delete the sap_json file
+        await storageService.deleteFile('sap_json', `${id}.json`);
+
+        // Run Phase 2 logic (which will analyze any pending files in downloads)
+        const result = await runPhase2();
+
+        // Check if the document was successfully analyzed
+        if (await storageService.existsFile('sap_json', `${id}.json`)) {
+            const newDoc = await storageService.readFile('sap_json', `${id}.json`, true);
+            res.json({ success: true, message: "Document re-parsed successfully!", status: newDoc.status, data: newDoc });
+        } else {
+            res.json({ success: false, message: "Re-parsing completed, but document is still pending or failed.", result });
+        }
+    } catch (err) {
+        console.error("❌ Reparse failed:", err.message);
+        res.status(500).json({ error: "Failed to re-parse document", details: err.message });
+    }
+});
+
 app.post('/api/documents/:id/post-sap', async (req, res) => {
     try {
         const { id } = req.params;
@@ -1721,9 +2535,10 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
         }
 
         const settings = await getSettings();
+        docData = resolvePricingForDocument(docData, settings);
         const apiConfigs = settings.api_configs || [];
-        const btpConfig = apiConfigs.find(c => 
-            c.status === 'Active' && 
+        const btpConfig = apiConfigs.find(c =>
+            c.status === 'Active' &&
             (c.auth_type === 'OAuth2' || c.name?.toLowerCase().includes('btp') || c.name?.toLowerCase().includes('sales order') || c.endpoint?.includes('/odata/v4/sales-order'))
         );
 
@@ -1732,7 +2547,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
 
         if (SAP_BTP_ENABLED) {
             console.log(`☁️ [BTP] BTP Cloud Routing active. Initiating OAuth 2.0 token exchange...`);
-            
+
             let tokenUrl = process.env.SAP_BTP_TOKEN_URL || "https://mygo-bas-4e8bz4sk.authentication.us10.hana.ondemand.com/oauth/token";
             let baseUrl = process.env.SAP_BTP_BASE_URL || "https://mygo-consulting-inc-mygo-bas-4e8bz4sk-mygo-bas-salesord438f04c8.cfapps.us10-001.hana.ondemand.com";
             let clientId = process.env.SAP_BTP_CLIENT_ID;
@@ -1743,7 +2558,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
                 if (btpConfig.oauth_token_url) tokenUrl = btpConfig.oauth_token_url.trim();
                 if (btpConfig.client_id) clientId = btpConfig.client_id.trim();
                 if (btpConfig.client_secret) clientSecret = btpConfig.client_secret.trim();
-                
+
                 if (btpConfig.endpoint) {
                     const endpointStr = btpConfig.endpoint.trim();
                     if (endpointStr.includes('/odata/v4/sales-order/SalesOrders')) {
@@ -1810,7 +2625,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
                         if (existingOrders.length > 0) {
                             const existingOrder = existingOrders[0];
                             console.warn(`⚠️ [BTP] Duplicate check matched: Customer PO ${poNum} already exists in SAP as Sales Order ${existingOrder.SalesOrder}`);
-                            
+
                             // Save locally as success since it is already in SAP
                             docData.status = 'success';
                             docData.sap_document_number = existingOrder.SalesOrder;
@@ -1846,7 +2661,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
 
             if (btpPostResp.ok) {
                 console.log(`🎉 [BTP] Success! Sales Order processed successfully in Cloud BTP.`);
-                
+
                 let sapDocNumber = '';
                 try {
                     const respObj = JSON.parse(btpText);
@@ -1862,13 +2677,39 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
                 docData.status = 'success';
                 docData.sap_document_number = sapDocNumber;
                 docData.sap_payload = payload;
+
+                try {
+                    const docContext = docData.header?.context || docData.email_metadata?.expected_doc_type || 'SalesOrder';
+                    console.log(`📎 [BTP] Save Document success. Initiating attachment upload to SAP for document: ${sapDocNumber}...`);
+                    await uploadAttachmentToSAP(id, sapDocNumber, docContext, true, {
+                        accessToken,
+                        baseUrl
+                    });
+                    docData.sap_attachment_status = 'success';
+                } catch (attachErr) {
+                    console.error("⚠️ [BTP] SAP Attachment Upload failed:", attachErr.message);
+                    docData.sap_attachment_status = 'failed';
+                    docData.sap_attachment_error = attachErr.message;
+                }
+
                 await storageService.saveFile('sap_json', `${id}.json`, docData, true);
 
-                return res.json({ success: true, message: 'Sales Order posted to SAP BTP successfully!', data: btpText, sap_document_number: sapDocNumber });
+                return res.json({ 
+                    success: true, 
+                    message: 'Sales Order posted to SAP BTP successfully!', 
+                    data: btpText, 
+                    sap_document_number: sapDocNumber,
+                    sap_attachment_status: docData.sap_attachment_status,
+                    sap_attachment_error: docData.sap_attachment_error
+                });
             } else {
                 console.warn(`⚠️ [BTP] Post request returned error: (Status ${btpPostResp.status}) - ${btpText}`);
-                return res.status(btpPostResp.status).json({ 
-                    error: `SAP BTP CAP API returned Status ${btpPostResp.status}`, 
+                docData.status = 'failed';
+                docData.sap_error = `BTP CAP API Error: Status ${btpPostResp.status} - ${btpText}`;
+                await storageService.saveFile('sap_json', `${id}.json`, docData, true);
+
+                return res.status(btpPostResp.status).json({
+                    error: `SAP BTP CAP API returned Status ${btpPostResp.status}`,
                     details: btpText,
                     message: "Note: Create Sales Order endpoint on BTP CAP is still planned/mocked on SAP Gateway. The OAuth credentials, token exchange, and OData payload format are fully verified!"
                 });
@@ -1887,15 +2728,16 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
             console.log(`💡 [SAP] Mock mode active. Simulating successful Sales Order posting...`);
             await sleep(2000); // Simulate network latency
             const sapDocNumber = `90000${Math.floor(100000 + Math.random() * 900000)}`;
-            
+
             docData.status = 'success';
             docData.sap_document_number = sapDocNumber;
             docData.sap_payload = payload;
+            docData.sap_attachment_status = 'success';
             await storageService.saveFile('sap_json', `${id}.json`, docData, true);
 
-            return res.json({ 
-                success: true, 
-                message: 'Sales Order posted to SAP successfully! (MOCK MODE ACTIVE)', 
+            return res.json({
+                success: true,
+                message: 'Sales Order posted to SAP successfully! (MOCK MODE ACTIVE)',
                 data: JSON.stringify({
                     d: {
                         Doc_typ: "OR1",
@@ -1904,7 +2746,8 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
                         Sold_to_party: "BP-CUST"
                     }
                 }),
-                sap_document_number: sapDocNumber
+                sap_document_number: sapDocNumber,
+                sap_attachment_status: 'success'
             });
         }
 
@@ -1918,9 +2761,9 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
 
         // 4. Connect to SAP using native Fetch
         console.log(`🔒 [SAP] Fetching CSRF Token from: ${TOKEN_URL}`);
-        
+
         const authHeader = 'Basic ' + Buffer.from(`${SAP_USER}:${SAP_PASSWORD}`).toString('base64');
-        
+
         const tokenResp = await fetch(TOKEN_URL, {
             method: 'GET',
             headers: {
@@ -1944,7 +2787,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
         const cookies = tokenResp.headers.get('set-cookie') || '';
 
         console.log(`🚀 [SAP] Posting Sales Order to SAP at: ${POST_URL}`);
-        
+
         const postHeaders = {
             'Authorization': authHeader,
             'x-csrf-token': csrfToken,
@@ -1966,7 +2809,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
 
         if (sapPostResp.ok) {
             console.log(`🎉 [SAP] Success! Sales Order posted successfully.`);
-            
+
             let sapDocNumber = '';
             try {
                 const respObj = JSON.parse(sapText);
@@ -1982,16 +2825,51 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
             docData.status = 'success';
             docData.sap_document_number = sapDocNumber;
             docData.sap_payload = payload;
+
+            try {
+                const docContext = docData.header?.context || docData.email_metadata?.expected_doc_type || 'SalesOrder';
+                console.log(`📎 [SAP] Save Document success. Initiating attachment upload to SAP for document: ${sapDocNumber}...`);
+                await uploadAttachmentToSAP(id, sapDocNumber, docContext, false, {
+                    authHeader,
+                    sapHost: SAP_HOST,
+                    sapPort: SAP_PORT,
+                    sapClient: SAP_CLIENT
+                });
+                docData.sap_attachment_status = 'success';
+            } catch (attachErr) {
+                console.error("⚠️ [SAP] SAP Attachment Upload failed:", attachErr.message);
+                docData.sap_attachment_status = 'failed';
+                docData.sap_attachment_error = attachErr.message;
+            }
+
             await storageService.saveFile('sap_json', `${id}.json`, docData, true);
 
-            res.json({ success: true, message: 'Sales Order posted to SAP successfully!', data: sapText, sap_document_number: sapDocNumber });
+            res.json({ 
+                success: true, 
+                message: 'Sales Order posted to SAP successfully!', 
+                data: sapText, 
+                sap_document_number: sapDocNumber,
+                sap_attachment_status: docData.sap_attachment_status,
+                sap_attachment_error: docData.sap_attachment_error
+            });
         } else {
             console.error(`❌ [SAP] Error from SAP: (Status ${sapPostResp.status}) - ${sapText}`);
+            docData.status = 'failed';
+            docData.sap_error = `SAP Error: Status ${sapPostResp.status} - ${sapText}`;
+            await storageService.saveFile('sap_json', `${id}.json`, docData, true);
+
             res.status(sapPostResp.status).json({ error: `SAP Error (${sapPostResp.status})`, details: sapText });
         }
 
     } catch (e) {
         console.error(`❌ [SAP] Posting failed:`, e.message);
+        try {
+            docData.status = 'failed';
+            docData.sap_error = `Connection/Post Error: ${e.message}`;
+            await storageService.saveFile('sap_json', `${id}.json`, docData, true);
+        } catch (saveErr) {
+            console.error("Failed to update status to failed in JSON:", saveErr.message);
+        }
         if (e.message.includes('fetch failed')) {
             return res.status(503).json({
                 error: "SAP Server Unreachable",
@@ -2010,9 +2888,30 @@ app.get('/api/stats', async (req, res) => {
     let failedCount = 0;
 
     try {
-        successCount = (await storageService.listFiles('sap_json', '.json')).length;
-        pendingCount = (await storageService.listFiles('downloads', '.pdf')).length;
-        failedCount = (await storageService.listFiles('archive_junk', '.pdf')).length;
+        const sapJsonFiles = await storageService.listFiles('sap_json', '.json');
+        for (const f of sapJsonFiles) {
+            try {
+                const data = await storageService.readFile('sap_json', f, true);
+                if (data.status === 'success' || data.status === 'Success') {
+                    successCount++;
+                } else if (data.status === 'failed' || data.status === 'failed_parsing') {
+                    failedCount++;
+                } else {
+                    successCount++;
+                }
+            } catch {
+                successCount++;
+            }
+        }
+
+        const junkFiles = await storageService.listFiles('archive_junk', '');
+        failedCount += junkFiles.filter(f => f.toLowerCase().endsWith('.pdf')).length;
+
+        const downloadsFiles = await storageService.listFiles('downloads', '');
+        pendingCount = downloadsFiles.filter(f => {
+            const ext = path.extname(f).toLowerCase();
+            return ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'].includes(ext);
+        }).length;
     } catch { /* ignore */ }
 
     const totalProcessed = successCount + failedCount;
@@ -2146,8 +3045,14 @@ async function runGmailSync(settings, isFirstSync) {
             password: settings.app_password,
             server: settings.imap_server || 'imap.gmail.com',
             expected_doc_type: 'Invoice',
+            domain: '',
+            customer_name: '',
+            customer_address: '',
+            sales_org: '',
+            distr_chan: '',
+            division: '',
             company_code: ''
-          }] : [];
+        }] : [];
 
     if (emails.length === 0) return 'Gmail skip: No email configured';
 
@@ -2162,11 +3067,17 @@ async function runGmailSync(settings, isFirstSync) {
         const password = (emailConf.password || '').replace(/ /g, '');
         const host = emailConf.server || 'imap.gmail.com';
         const expectedDocType = emailConf.expected_doc_type || 'Invoice';
+        const domain = emailConf.domain || '';
+        const customerName = emailConf.customer_name || '';
+        const customerAddress = emailConf.customer_address || '';
+        const salesOrg = emailConf.sales_org || '';
+        const distrChan = emailConf.distr_chan || '';
+        const division = emailConf.division || '';
         const companyCode = emailConf.company_code || '';
-        
+
         let imap;
         try {
-            console.log(`📫 [Sync] Checking Gmail for ${user} (expects: ${expectedDocType}, co code: ${companyCode})...`);
+            console.log(`📫 [Sync] Checking Gmail for ${user} (expects: ${expectedDocType}, domain: ${domain})...`);
             imap = await imapConnect({ user, password, host });
             await imapOpenBox(imap, 'INBOX');
 
@@ -2188,6 +3099,34 @@ async function runGmailSync(settings, isFirstSync) {
                     const bodyContent = parsed.text || '';
                     const allAttachments = (parsed.attachments || []).map((a) => a.filename).filter(Boolean);
 
+                    // Domain inheritance lookup for incoming email domain matching
+                    let finalDomain = domain;
+                    let finalCustName = customerName;
+                    let finalCustAddr = customerAddress;
+                    let finalSalesOrg = salesOrg;
+                    let finalDistrChan = distrChan;
+                    let finalDivision = division;
+                    let finalCompanyCode = companyCode;
+
+                    const senderEmail = from.includes('<') ? (from.match(/<([^>]+)>/)?.[1]?.trim() || from) : from;
+                    const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1].trim().toLowerCase() : '';
+
+                    if (senderDomain) {
+                        const matchedDomainConf = (settings.emails || []).find(e => 
+                            e.domain && e.domain.toLowerCase() === senderDomain
+                        );
+                        if (matchedDomainConf) {
+                            finalDomain = matchedDomainConf.domain || finalDomain;
+                            finalCustName = matchedDomainConf.customer_name || finalCustName;
+                            finalCustAddr = matchedDomainConf.customer_address || finalCustAddr;
+                            finalSalesOrg = matchedDomainConf.sales_org || finalSalesOrg;
+                            finalDistrChan = matchedDomainConf.distr_chan || finalDistrChan;
+                            finalDivision = matchedDomainConf.division || finalDivision;
+                            finalCompanyCode = matchedDomainConf.company_code || finalCompanyCode;
+                            console.log(`📫 [Sync] Inherited domain settings from domain config "${senderDomain}": Customer Name: "${finalCustName}"`);
+                        }
+                    }
+
                     // Process all supported attachments (PDF, Images, Office Docs, Plain Text)
                     let pdfFound = false;
                     const supportedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.png', '.jpg', '.jpeg', '.tiff', '.webp', '.txt'];
@@ -2199,7 +3138,7 @@ async function runGmailSync(settings, isFirstSync) {
 
                         const uniqueFilename = `${seqno}_${att.filename}`;
 
-                        if (await storageService.existsFile('downloads', uniqueFilename) || 
+                        if (await storageService.existsFile('downloads', uniqueFilename) ||
                             await storageService.existsFile('sap_docs', uniqueFilename) ||
                             await storageService.existsFile('archive_junk', uniqueFilename)) continue;
 
@@ -2218,25 +3157,32 @@ async function runGmailSync(settings, isFirstSync) {
                             original_filename: att.filename,
                             is_body_only: false,
                             expected_doc_type: expectedDocType,
-                            company_code: companyCode
+                            domain: finalDomain,
+                            customer_name: finalCustName,
+                            customer_address: finalCustAddr,
+                            sales_org: finalSalesOrg,
+                            distr_chan: finalDistrChan,
+                            division: finalDivision,
+                            company_code: finalCompanyCode
                         };
                         const baseName = path.parse(uniqueFilename).name;
                         await storageService.saveFile('metadata', baseName + '.json', meta, true);
                         downloadedCount++;
                     }
 
-                    // Check body keywords if no PDFs
-                    if (!pdfFound && keywords.length > 0) {
+                    // Check body keywords if no attachments at all
+                    const hasAttachments = parsed.attachments && parsed.attachments.length > 0;
+                    if (!hasAttachments && keywords.length > 0) {
                         const matchedKeyword = keywords.find(kw => bodyContent.toLowerCase().includes(kw.toLowerCase()));
                         if (matchedKeyword) {
                             console.log(`✨ [Sync] Keyword matched in body: "${matchedKeyword}"! Ingesting body-only email.`);
-                            
+
                             const uniqueFilename = `body_${seqno}.pdf`;
 
-                            if (!await storageService.existsFile('downloads', uniqueFilename) && 
+                            if (!await storageService.existsFile('downloads', uniqueFilename) &&
                                 !await storageService.existsFile('sap_docs', uniqueFilename) &&
                                 !await storageService.existsFile('archive_junk', uniqueFilename)) {
-                                
+
                                 await storageService.saveFile('downloads', uniqueFilename, Buffer.from(`EMAIL_BODY_ONLY:${matchedKeyword}`));
 
                                 const emailSummary = await geminiSummarize(bodyContent, geminiKey);
@@ -2252,7 +3198,13 @@ async function runGmailSync(settings, isFirstSync) {
                                     original_filename: 'Email Body Content',
                                     is_body_only: true,
                                     expected_doc_type: expectedDocType,
-                                    company_code: companyCode,
+                                    domain: finalDomain,
+                                    customer_name: finalCustName,
+                                    customer_address: finalCustAddr,
+                                    sales_org: finalSalesOrg,
+                                    distr_chan: finalDistrChan,
+                                    division: finalDivision,
+                                    company_code: finalCompanyCode,
                                     matched_keyword: matchedKeyword
                                 };
                                 const baseName = path.parse(uniqueFilename).name;
@@ -2354,7 +3306,7 @@ async function getOutlookToken(tokens, userEmail) {
         return newTokens.access_token;
     } catch (err) {
         console.error(`❌ [OUTLOOK] Failed to refresh Outlook access token via MSAL: ${err.message}`);
-        
+
         // Fallback to manual refresh_token logic if it exists (for backward compatibility)
         if (tokens.refresh_token) {
             console.log('🔄 [OUTLOOK] Attempting manual refresh token fallback...');
@@ -2420,7 +3372,7 @@ async function getOutlookToken(tokens, userEmail) {
                 console.error(`❌ [OUTLOOK] Manual refresh token fallback failed: ${fallbackErr.message}`);
             }
         }
-        
+
         return tokens.access_token;
     }
 }
@@ -2435,8 +3387,14 @@ async function runOutlookSync(isFirstSync) {
             email: settings.outlook_tokens.user_principal_name,
             outlook_tokens: settings.outlook_tokens,
             expected_doc_type: 'Invoice',
+            domain: '',
+            customer_name: '',
+            customer_address: '',
+            sales_org: '',
+            distr_chan: '',
+            division: '',
             company_code: ''
-          }] : [];
+        }] : [];
 
     if (outlookAccounts.length === 0) return 'Outlook skip: No Outlook account configured';
 
@@ -2452,14 +3410,20 @@ async function runOutlookSync(isFirstSync) {
             errors.push(`${account.email}: Failed to get access token`);
             continue;
         }
-        
+
         const headers = { Authorization: `Bearer ${token}` };
         const user_principal_name = account.email;
         const expectedDocType = account.expected_doc_type || 'Invoice';
+        const domain = account.domain || '';
+        const customerName = account.customer_name || '';
+        const customerAddress = account.customer_address || '';
+        const salesOrg = account.sales_org || '';
+        const distrChan = account.distr_chan || '';
+        const division = account.division || '';
         const companyCode = account.company_code || '';
 
         try {
-            console.log(`📫 [Sync] Checking Outlook for ${user_principal_name} (expects: ${expectedDocType}, co code: ${companyCode})...`);
+            console.log(`📫 [Sync] Checking Outlook for ${user_principal_name} (expects: ${expectedDocType}, domain: ${domain})...`);
             let filterQuery = '$filter=isRead eq false';
             if (isFirstSync) {
                 filterQuery += '&$top=50';
@@ -2500,7 +3464,7 @@ async function runOutlookSync(isFirstSync) {
                         const safeId = msgId.slice(-12);
                         const uniqueFilename = `${safeId}_${att.name}`;
 
-                        if (await storageService.existsFile('downloads', uniqueFilename) || 
+                        if (await storageService.existsFile('downloads', uniqueFilename) ||
                             await storageService.existsFile('sap_docs', uniqueFilename) ||
                             await storageService.existsFile('archive_junk', uniqueFilename)) continue;
 
@@ -2516,6 +3480,34 @@ async function runOutlookSync(isFirstSync) {
                             cleanBody = stripHtml(cleanBody);
                         }
 
+                        // Domain inheritance lookup for incoming email domain matching
+                        let finalDomain = domain;
+                        let finalCustName = customerName;
+                        let finalCustAddr = customerAddress;
+                        let finalSalesOrg = salesOrg;
+                        let finalDistrChan = distrChan;
+                        let finalDivision = division;
+                        let finalCompanyCode = companyCode;
+
+                        const senderEmail = from.includes('<') ? (from.match(/<([^>]+)>/)?.[1]?.trim() || from) : from;
+                        const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1].trim().toLowerCase() : '';
+
+                        if (senderDomain) {
+                            const matchedDomainConf = (settings.emails || []).find(e => 
+                                e.domain && e.domain.toLowerCase() === senderDomain
+                            );
+                            if (matchedDomainConf) {
+                                finalDomain = matchedDomainConf.domain || finalDomain;
+                                finalCustName = matchedDomainConf.customer_name || finalCustName;
+                                finalCustAddr = matchedDomainConf.customer_address || finalCustAddr;
+                                finalSalesOrg = matchedDomainConf.sales_org || finalSalesOrg;
+                                finalDistrChan = matchedDomainConf.distr_chan || finalDistrChan;
+                                finalDivision = matchedDomainConf.division || finalDivision;
+                                finalCompanyCode = matchedDomainConf.company_code || finalCompanyCode;
+                                console.log(`📫 [Sync] Outlook inherited domain settings from domain config "${senderDomain}": Customer Name: "${finalCustName}"`);
+                            }
+                        }
+
                         const meta = {
                             from,
                             recipient_email: toEmail,
@@ -2527,7 +3519,13 @@ async function runOutlookSync(isFirstSync) {
                             original_filename: att.name,
                             is_body_only: false,
                             expected_doc_type: expectedDocType,
-                            company_code: companyCode
+                            domain: finalDomain,
+                            customer_name: finalCustName,
+                            customer_address: finalCustAddr,
+                            sales_org: finalSalesOrg,
+                            distr_chan: finalDistrChan,
+                            division: finalDivision,
+                            company_code: finalCompanyCode
                         };
                         const baseName = path.parse(uniqueFilename).name;
                         await storageService.saveFile('metadata', baseName + '.json', meta, true);
@@ -2535,19 +3533,19 @@ async function runOutlookSync(isFirstSync) {
                     }
                 }
 
-                // Check body keywords if no PDFs
-                if (!pdfFound && keywords.length > 0) {
+                // Check body keywords if no attachments at all
+                if (!msg.hasAttachments && keywords.length > 0) {
                     const matchedKeyword = keywords.find(kw => bodyFullText.toLowerCase().includes(kw.toLowerCase()) || bodyContent.toLowerCase().includes(kw.toLowerCase()));
                     if (matchedKeyword) {
                         console.log(`✨ [Sync] Keyword matched in Outlook body: "${matchedKeyword}"! Ingesting body-only email.`);
-                        
+
                         const safeId = msgId.slice(-12);
                         const uniqueFilename = `body_${safeId}.pdf`;
 
-                        if (!await storageService.existsFile('downloads', uniqueFilename) && 
+                        if (!await storageService.existsFile('downloads', uniqueFilename) &&
                             !await storageService.existsFile('sap_docs', uniqueFilename) &&
                             !await storageService.existsFile('archive_junk', uniqueFilename)) {
-                            
+
                             await storageService.saveFile('downloads', uniqueFilename, Buffer.from(`EMAIL_BODY_ONLY:${matchedKeyword}`));
 
                             const emailSummary = await geminiSummarize(bodyContent, geminiKey);
@@ -2556,6 +3554,34 @@ async function runOutlookSync(isFirstSync) {
                             let cleanBody = msg.body?.content || msg.bodyPreview || '';
                             if (isHtml) {
                                 cleanBody = stripHtml(cleanBody);
+                            }
+
+                            // Domain inheritance lookup for incoming email domain matching
+                            let finalDomain = domain;
+                            let finalCustName = customerName;
+                            let finalCustAddr = customerAddress;
+                            let finalSalesOrg = salesOrg;
+                            let finalDistrChan = distrChan;
+                            let finalDivision = division;
+                            let finalCompanyCode = companyCode;
+
+                            const senderEmail = from.includes('<') ? (from.match(/<([^>]+)>/)?.[1]?.trim() || from) : from;
+                            const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1].trim().toLowerCase() : '';
+
+                            if (senderDomain) {
+                                const matchedDomainConf = (settings.emails || []).find(e => 
+                                    e.domain && e.domain.toLowerCase() === senderDomain
+                                );
+                                if (matchedDomainConf) {
+                                    finalDomain = matchedDomainConf.domain || finalDomain;
+                                    finalCustName = matchedDomainConf.customer_name || finalCustName;
+                                    finalCustAddr = matchedDomainConf.customer_address || finalCustAddr;
+                                    finalSalesOrg = matchedDomainConf.sales_org || finalSalesOrg;
+                                    finalDistrChan = matchedDomainConf.distr_chan || finalDistrChan;
+                                    finalDivision = matchedDomainConf.division || finalDivision;
+                                    finalCompanyCode = matchedDomainConf.company_code || finalCompanyCode;
+                                    console.log(`📫 [Sync] Outlook inherited domain settings from domain config "${senderDomain}": Customer Name: "${finalCustName}"`);
+                                }
                             }
 
                             const meta = {
@@ -2569,7 +3595,13 @@ async function runOutlookSync(isFirstSync) {
                                 original_filename: 'Email Body Content',
                                 is_body_only: true,
                                 expected_doc_type: expectedDocType,
-                                company_code: companyCode,
+                                domain: finalDomain,
+                                customer_name: finalCustName,
+                                customer_address: finalCustAddr,
+                                sales_org: finalSalesOrg,
+                                distr_chan: finalDistrChan,
+                                division: finalDivision,
+                                company_code: finalCompanyCode,
                                 matched_keyword: matchedKeyword
                             };
                             const baseName = path.parse(uniqueFilename).name;
@@ -2613,13 +3645,124 @@ async function runPhase1(settings, isFirstSync, sourceOverride) {
     return runGmailSync(settings, isFirstSync);
 }
 
+// ─── JSON PARSING & CLEANUP HELPERS ─────────────────────────────
+
+function cleanMismatchedQuotes(jsonString) {
+    let inString = false;
+    let result = '';
+    let escaped = false;
+
+    for (let i = 0; i < jsonString.length; i++) {
+        const char = jsonString[i];
+
+        if (char === '\\' && inString) {
+            escaped = !escaped;
+            result += char;
+            continue;
+        }
+
+        if (char === '"') {
+            if (escaped) {
+                result += char;
+                escaped = false;
+            } else {
+                if (inString) {
+                    // Peek ahead to see if this quote is structural
+                    let isClosing = false;
+                    let j = i + 1;
+                    while (j < jsonString.length && /\s/.test(jsonString[j])) {
+                        j++;
+                    }
+                    if (j === jsonString.length) {
+                        isClosing = true;
+                    } else {
+                        const nextChar = jsonString[j];
+                        if (nextChar === '}' || nextChar === ']' || nextChar === ':') {
+                            isClosing = true;
+                        } else if (nextChar === ',') {
+                            // Check if the comma is structural
+                            let remainder = jsonString.substring(j + 1).trimStart();
+
+                            // Check if it looks like a key-value pair: "key":
+                            const isNextKey = /^"[^"]+"\s*:/.test(remainder);
+
+                            // Check if it looks like next array item
+                            const isNextArrayItem = /^("[^"]*"|{|^\[|\d|true|false|null)/.test(remainder);
+
+                            if (isNextKey || isNextArrayItem) {
+                                isClosing = true;
+                            }
+                        }
+                    }
+
+                    if (isClosing) {
+                        inString = false;
+                        result += char;
+                    } else {
+                        result += '\\"';
+                    }
+                } else {
+                    inString = true;
+                    result += char;
+                }
+            }
+        } else {
+            result += char;
+            escaped = false;
+        }
+    }
+    return result;
+}
+
+function parseAIJSONResponse(text) {
+    if (!text) throw new Error('Empty AI response');
+    let cleaned = text.trim();
+
+    // Strip markdown formatting
+    if (cleaned.startsWith('```')) {
+        const firstLineBreak = cleaned.indexOf('\n');
+        if (firstLineBreak !== -1) {
+            cleaned = cleaned.substring(firstLineBreak).trim();
+        }
+        if (cleaned.endsWith('```')) {
+            cleaned = cleaned.substring(0, cleaned.length - 3).trim();
+        }
+    }
+
+    // Extract actual JSON boundaries
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    }
+
+    // Clean mismatched quotes and comments/commas
+    cleaned = cleanMismatchedQuotes(cleaned);
+
+    // Remove inline or multi-line comments
+    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
+
+    // Remove trailing commas before closing braces/brackets
+    cleaned = cleaned.replace(/,\s*([\]}])/g, '$1');
+
+    try {
+        return JSON.parse(cleaned);
+    } catch (parseErr) {
+        console.error('❌ [AI] Failed to parse repaired JSON. Raw text:');
+        console.error(text);
+        console.error('Repaired text:');
+        console.error(cleaned);
+        throw parseErr;
+    }
+}
+
 // ─── PHASE 2 — AI ANALYSIS ──────────────────────────────────────
 
 async function runPhase2() {
     const settings = await getSettings();
     let activeProvider = (settings.active_provider || 'Gemini').toLowerCase();
     if (activeProvider === 'claude') activeProvider = 'anthropic';
-    
+
     let apiKey = settings[`${activeProvider}_api_key`];
     if (!apiKey || apiKey === '********') {
         if (activeProvider === 'gemini') {
@@ -2628,13 +3771,13 @@ async function runPhase2() {
             apiKey = null;
         }
     }
-    
+
     const customPrompt = settings.custom_prompt || PROMPT_ANALYSIS;
 
     if (!apiKey) return `Phase 2 error: Missing API key for ${settings.active_provider || 'Gemini'}`;
 
     const client = new GoogleGenAI({ apiKey });
-    
+
     let modelId = settings[`${activeProvider}_model`];
     if (!modelId) {
         if (activeProvider === 'gemini') {
@@ -2647,7 +3790,7 @@ async function runPhase2() {
     }
 
     let processedCount = 0;
-    
+
     let pendingDocs = [];
     try {
         const allFiles = await storageService.listFiles('downloads', '');
@@ -2673,7 +3816,7 @@ async function runPhase2() {
                 try {
                     if (!await storageService.existsFile('downloads', fname)) break;
                     const fileData = await storageService.readFile('downloads', fname);
-                    
+
                     if (!fileData.length && !fname.startsWith('body_')) break;
 
                     let isBodyOnly = false;
@@ -2688,8 +3831,8 @@ async function runPhase2() {
                     let response;
                     if (isBodyOnly) {
                         console.log(`🧠 [AI] Parsing body-only email contents using Gemini...`);
-                        const emailContent = `Analyze this email body for SAP S/4HANA integration and extract the document fields. Here is the email content:\n\nSubject: ${emailMeta.subject}\nFrom: ${emailMeta.from}\nDate: ${emailMeta.received_at}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nCompany Code: ${emailMeta.company_code || ''}\n\nEmail Body:\n${emailMeta.body || ''}`;
-                        
+                        const emailContent = `Analyze this email body for SAP S/4HANA integration and extract the document fields. Here is the email content:\n\nSubject: ${emailMeta.subject}\nFrom: ${emailMeta.from}\nDate: ${emailMeta.received_at}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body:\n${emailMeta.body || ''}`;
+
                         response = await client.models.generateContent({
                             model: modelId,
                             contents: [
@@ -2701,7 +3844,7 @@ async function runPhase2() {
                     } else {
                         const ext = path.extname(fname).toLowerCase();
                         const supportedImages = ['.png', '.jpg', '.jpeg', '.webp', '.tiff'];
-                        
+
                         if (ext === '.pdf') {
                             const base64Data = fileData.toString('base64');
                             response = await client.models.generateContent({
@@ -2737,7 +3880,7 @@ async function runPhase2() {
                         } else {
                             // Office Documents (.docx, .doc, .xlsx, .xls, .pptx, .ppt)
                             // Treat safely by using email body, metadata and filename to perform contextual parse!
-                            const docDescription = `Analyze this document for SAP S/4HANA integration. The document is a Microsoft Office file: "${fname}". Since it is a binary office file, perform a contextual analysis based on the email details:\n\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nCompany Code: ${emailMeta.company_code || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}`;
+                            const docDescription = `Analyze this document for SAP S/4HANA integration. The document is a Microsoft Office file: "${fname}". Since it is a binary office file, perform a contextual analysis based on the email details:\n\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}`;
                             response = await client.models.generateContent({
                                 model: modelId,
                                 contents: [
@@ -2749,33 +3892,60 @@ async function runPhase2() {
                         }
                     }
 
-                    if (!response.text) throw new Error('Empty AI response');
-
-                    const aiData = JSON.parse(response.text.trim());
-                    const isLegit = aiData.is_legit_invoice || false;
+                    const aiData = parseAIJSONResponse(response.text);
+                    const isLegit = aiData.is_legit_invoice === true ||
+                        aiData.header?.context === 'Sales Order' ||
+                        aiData.header?.context === 'Vendor Invoice';
 
                     // Apply Business Partner mapping from settings
                     if (emailMeta && emailMeta.from) {
                         const fromStr = emailMeta.from;
                         const match = fromStr.match(/<([^>]+)>/);
                         const senderEmail = match ? match[1].trim().toLowerCase() : fromStr.trim().toLowerCase();
-                        
+
                         const matchedMapping = (settings.bp_mappings || []).find(
                             m => m.email?.trim().toLowerCase() === senderEmail
                         );
                         if (matchedMapping && matchedMapping.partnerName) {
                             if (!aiData.header) aiData.header = {};
-                            console.log(`💡 [AI Mapping] Overriding Business Partner for ${senderEmail} to: ${matchedMapping.partnerName}`);
-                            aiData.header.supplier_name = matchedMapping.partnerName;
+                            const docContext = emailMeta?.expected_doc_type || aiData.header?.context || 'Vendor Invoice';
+                            const isSalesOrder = docContext === 'Sales Order';
+                            
+                            if (isSalesOrder) {
+                                console.log(`💡 [AI Mapping] Mapping Business Partner for ${senderEmail} as Sales Order SoldToParty: ${matchedMapping.partnerName}`);
+                                aiData.header.sold_to_party_number = matchedMapping.partnerName;
+                            } else {
+                                console.log(`💡 [AI Mapping] Mapping Business Partner for ${senderEmail} as Supplier Number: ${matchedMapping.partnerName}`);
+                                aiData.header.supplier_number = matchedMapping.partnerName;
+                            }
                         }
                     }
 
                     aiData.email_metadata = emailMeta;
                     aiData.is_body_only = isBodyOnly;
-                    
+
                     if (emailMeta && emailMeta.expected_doc_type) {
                         if (!aiData.header) aiData.header = {};
                         aiData.header.context = emailMeta.expected_doc_type;
+                    }
+
+                    if (emailMeta && emailMeta.customer_name) {
+                        if (!aiData.header) aiData.header = {};
+                        aiData.header.customer_name = emailMeta.customer_name;
+                    }
+
+                    if (emailMeta && emailMeta.customer_address) {
+                        if (!aiData.header) aiData.header = {};
+                        aiData.header.customer_address = emailMeta.customer_address;
+                        aiData.header.sold_to_address = emailMeta.customer_address;
+                    }
+
+                    if (emailMeta) {
+                        if (!aiData.header) aiData.header = {};
+                        if (emailMeta.sales_org) aiData.header.sales_organization = emailMeta.sales_org;
+                        if (emailMeta.distr_chan) aiData.header.distribution_channel = emailMeta.distr_chan;
+                        if (emailMeta.division) aiData.header.division = emailMeta.division;
+                        if (emailMeta.company_code) aiData.header.company_code = emailMeta.company_code;
                     }
 
                     if (isLegit) {
@@ -2783,7 +3953,26 @@ async function runPhase2() {
                         await storageService.moveFile('downloads', 'sap_docs', fname);
                         await storageService.saveFile('sap_json', baseName + '.json', aiData, true);
                     } else {
-                        await storageService.moveFile('downloads', 'archive_junk', fname);
+                        console.log(`⚠️ AI determined document ${fname} is not legit. Saving as failed_parsing instead of archive_junk.`);
+                        const failedData = {
+                            human_readable_id: getHumanReadableId(baseName),
+                            is_legit_invoice: false,
+                            status: 'failed_parsing',
+                            error: 'AI did not recognize this as a legitimate invoice or sales order.',
+                            header: {
+                                context: emailMeta?.expected_doc_type || 'Unknown',
+                                supplier_name: aiData.header?.supplier_name || 'AI Ingested (Unrecognized)'
+                            },
+                            totals: {
+                                total_amount: aiData.totals?.total_amount || 'Error',
+                                currency: aiData.totals?.currency || ''
+                            },
+                            email_metadata: emailMeta,
+                            is_body_only: isBodyOnly,
+                            exceptions: `AI determined this document as invalid or not a recognized invoice/sales order.`
+                        };
+                        await storageService.moveFile('downloads', 'sap_docs', fname);
+                        await storageService.saveFile('sap_json', baseName + '.json', failedData, true);
                     }
 
                     if (await storageService.existsFile('metadata', metaFilename)) {
@@ -2803,7 +3992,33 @@ async function runPhase2() {
                         attempts++;
                         console.error(`❌ Error analyzing ${fname}:`, errMsg);
                         await sleep(5000);
-                        if (attempts >= maxAttempts) break;
+                        if (attempts >= maxAttempts) {
+                            console.log(`❌ AI parsing failed completely for ${fname} after ${attempts} attempts. Saving as failed_parsing.`);
+                            const failedData = {
+                                human_readable_id: getHumanReadableId(baseName),
+                                is_legit_invoice: false,
+                                status: 'failed_parsing',
+                                error: errMsg,
+                                header: {
+                                    context: emailMeta?.expected_doc_type || 'Unknown',
+                                    supplier_name: 'AI Parsing Failed'
+                                },
+                                totals: {
+                                    total_amount: 'Error',
+                                    currency: ''
+                                },
+                                email_metadata: emailMeta,
+                                is_body_only: isBodyOnly,
+                                exceptions: `AI Analysis Error: ${errMsg}`
+                            };
+                            await storageService.moveFile('downloads', 'sap_docs', fname);
+                            await storageService.saveFile('sap_json', baseName + '.json', failedData, true);
+
+                            if (await storageService.existsFile('metadata', metaFilename)) {
+                                await storageService.deleteFile('metadata', metaFilename);
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -2814,6 +4029,51 @@ async function runPhase2() {
 
     return `Analyzed ${processedCount} documents`;
 }
+
+app.get('/api/logs/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const historyLines = readLastLines(LOG_FILE_PATH, 150);
+    const logRegex = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,\.]\d{3}) - ([A-Z]+) - (.*)$/;
+
+    historyLines.forEach(line => {
+        const match = line.match(logRegex);
+        if (match) {
+            const data = {
+                timestamp: match[1],
+                level: match[2],
+                message: match[3]
+            };
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        } else if (line.trim()) {
+            const data = {
+                timestamp: '',
+                level: 'INFO',
+                message: line
+            };
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        }
+    });
+
+    const onLog = (logObj) => {
+        res.write(`data: ${JSON.stringify(logObj)}\n\n`);
+    };
+
+    logEmitter.on('log', onLog);
+
+    const pingInterval = setInterval(() => {
+        res.write(': ping\n\n');
+    }, 30000);
+
+    req.on('close', () => {
+        logEmitter.off('log', onLog);
+        clearInterval(pingInterval);
+        res.end();
+    });
+});
 
 // ─── SYNC ROUTES ─────────────────────────────────────────────────
 
@@ -2864,7 +4124,7 @@ async function cleanupOldTrash() {
         const now = Date.now();
         const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
         let count = 0;
-        
+
         for (const f of trashFiles) {
             try {
                 const data = await storageService.readFile('trash_json', f, true);
@@ -2942,7 +4202,7 @@ function startServer() {
 }
 
 // Export for CLI usage
-export { app, runPhase1, runPhase2, getSettings, startServer };
+export { app, runPhase1, runPhase2, getSettings, startServer, buildSAPPayload };
 
 // Auto-start if this file is the main module
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);

@@ -15,6 +15,7 @@ import {
   Menu,
   LogOut,
   Shield,
+  Terminal,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ const navItems = [
   { title: "Analytics", path: "/analytics", icon: BarChart3 },
   { title: "API Config", path: "/api-config", icon: Globe },
   { title: "Settings", path: "/settings", icon: Settings },
+  { title: "Server Logs", path: "/serverlogs", icon: Terminal },
 ];
 
 interface AppShellProps {

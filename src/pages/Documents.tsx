@@ -211,6 +211,24 @@ export default function Documents() {
     }
   };
 
+  const handleReparse = async (id: string) => {
+    toast.loading(`Re-parsing document ${id}...`, { id: `reparse-${id}` });
+    try {
+      const res = await fetch(`${API_BASE}/documents/${id}/reparse`, {
+        method: "POST"
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success(data.message || "Document re-parsed successfully!", { id: `reparse-${id}` });
+        fetchDocs();
+      } else {
+        toast.error(data.message || data.error || "Failed to re-parse document", { id: `reparse-${id}` });
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to connect to backend", { id: `reparse-${id}` });
+    }
+  };
+
   const handleDeletePermanently = async (id: string) => {
     if (!confirm(`Are you sure you want to PERMANENTLY delete document ${id}? This action CANNOT be undone.`)) return;
     
@@ -559,13 +577,24 @@ export default function Documents() {
                           </button>
                         </div>
                       ) : (
-                        <button
-                          onClick={() => handleDelete(doc.id)}
-                          className="p-1 text-muted-foreground hover:text-destructive rounded hover:bg-destructive/10 transition-colors"
-                          title="Move to Recycle Bin"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          {doc.status === 'failed_parsing' && (
+                            <button
+                              onClick={() => handleReparse(doc.id)}
+                              className="p-1 text-muted-foreground hover:text-amber-500 rounded hover:bg-amber-500/10 transition-colors"
+                              title="Retry AI Parse"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDelete(doc.id)}
+                            className="p-1 text-muted-foreground hover:text-destructive rounded hover:bg-destructive/10 transition-colors"
+                            title="Move to Recycle Bin"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

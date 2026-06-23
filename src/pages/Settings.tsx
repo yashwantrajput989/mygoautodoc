@@ -24,6 +24,7 @@ import {
   Tag,
   X,
   Table,
+  DollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +38,7 @@ const sidebarItems = [
   { id: "keywords", label: "Keywords Watchlist", icon: Tag },
   { id: "duplicates", label: "Duplicate Detection", icon: ShieldCheck },
   { id: "mappings", label: "Mapping Table", icon: Table },
+  { id: "pricing", label: "Price Determination", icon: DollarSign },
   { id: "roles", label: "Manage Roles", icon: Key },
   { id: "credits", label: "Manage AI Credits", icon: Zap },
   { id: "users", label: "User Management", icon: Users },
@@ -79,6 +81,7 @@ export default function SettingsPage() {
           {activeTab === "roles" && <ManageRoles />}
           {activeTab === "credits" && <ManageCredits />}
           {activeTab === "users" && <ManageUsers />}
+          {activeTab === "pricing" && <PriceDeterminationSettings />}
         </div>
       </div>
     </div>
@@ -400,11 +403,35 @@ function ManageSources() {
   const [newPassword, setNewPassword] = useState("");
   const [newServer, setNewServer] = useState("imap.gmail.com");
   const [newDocType, setNewDocType] = useState("Vendor Invoice");
-  const [newCompanyCode, setNewCompanyCode] = useState("");
+  const [newDomain, setNewDomain] = useState("");
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [newCustomerAddress, setNewCustomerAddress] = useState("");
+  const [newSalesOrg, setNewSalesOrg] = useState("1010");
+  const [newDistrChan, setNewDistrChan] = useState("01");
+  const [newDivision, setNewDivision] = useState("01");
+  const [newCompanyCode, setNewCompanyCode] = useState("1010");
   
   // Testing connection state map: email -> boolean
   const [isTestingEmail, setIsTestingEmail] = useState<Record<string, boolean>>({});
   const [emailStatus, setEmailStatus] = useState<Record<string, "Connected" | "Disconnected" | "Pending">>({});
+
+  const handleEmailChange = (val: string) => {
+    setNewEmail(val);
+    if (val.includes('@')) {
+      const parts = val.split('@');
+      const domainPart = parts[1]?.trim().toLowerCase();
+      if (domainPart) {
+        setNewDomain(domainPart);
+        // Find existing email configuration with the same domain to inherit
+        const match = emails.find(e => e.domain && e.domain.toLowerCase() === domainPart);
+        if (match) {
+          setNewCustomerName(match.customer_name || "");
+          setNewCustomerAddress(match.customer_address || "");
+          toast.info(`Inherited settings for domain "${domainPart}"`, { id: "inherit-domain" });
+        }
+      }
+    }
+  };
 
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
@@ -420,7 +447,9 @@ function ManageSources() {
             password: data.app_password || "",
             server: data.imap_server || "imap.gmail.com",
             expected_doc_type: "Vendor Invoice",
-            company_code: "",
+            domain: data.user_email.includes('@') ? data.user_email.split('@')[1] : "",
+            customer_name: "",
+            customer_address: "",
             active: true,
             provider: "Gmail"
           }];
@@ -435,7 +464,13 @@ function ManageSources() {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('outlook') === 'success' && data.outlook_tokens) {
           const pendingType = sessionStorage.getItem('pending_outlook_doctype') || 'Vendor Invoice';
-          const pendingCC = sessionStorage.getItem('pending_outlook_cc') || '';
+          const pendingDomain = sessionStorage.getItem('pending_outlook_domain') || '';
+          const pendingCustomerName = sessionStorage.getItem('pending_outlook_customer_name') || '';
+          const pendingCustomerAddress = sessionStorage.getItem('pending_outlook_customer_address') || '';
+          const pendingSalesOrg = sessionStorage.getItem('pending_outlook_sales_org') || '';
+          const pendingDistrChan = sessionStorage.getItem('pending_outlook_distr_chan') || '';
+          const pendingDivision = sessionStorage.getItem('pending_outlook_division') || '';
+          const pendingCompanyCode = sessionStorage.getItem('pending_outlook_company_code') || '';
           
           const newOutlookEmail = {
             id: Date.now(),
@@ -443,7 +478,13 @@ function ManageSources() {
             provider: 'Outlook',
             outlook_tokens: data.outlook_tokens,
             expected_doc_type: pendingType,
-            company_code: pendingCC,
+            domain: pendingDomain,
+            customer_name: pendingCustomerName,
+            customer_address: pendingCustomerAddress,
+            sales_org: pendingType === "Sales Order" ? pendingSalesOrg : "",
+            distr_chan: pendingType === "Sales Order" ? pendingDistrChan : "",
+            division: pendingType === "Sales Order" ? pendingDivision : "",
+            company_code: pendingType === "Vendor Invoice" ? pendingCompanyCode : "",
             active: true
           };
 
@@ -467,7 +508,13 @@ function ManageSources() {
 
           // Clear session storage and URL query
           sessionStorage.removeItem('pending_outlook_doctype');
-          sessionStorage.removeItem('pending_outlook_cc');
+          sessionStorage.removeItem('pending_outlook_domain');
+          sessionStorage.removeItem('pending_outlook_customer_name');
+          sessionStorage.removeItem('pending_outlook_customer_address');
+          sessionStorage.removeItem('pending_outlook_sales_org');
+          sessionStorage.removeItem('pending_outlook_distr_chan');
+          sessionStorage.removeItem('pending_outlook_division');
+          sessionStorage.removeItem('pending_outlook_company_code');
           window.history.replaceState({}, document.title, window.location.pathname);
         } else {
           setEmails(currentEmails);
@@ -547,7 +594,13 @@ function ManageSources() {
       password: newPassword,
       server: newServer.trim() || "imap.gmail.com",
       expected_doc_type: newDocType,
-      company_code: newCompanyCode.trim(),
+      domain: newDomain.trim(),
+      customer_name: newCustomerName.trim(),
+      customer_address: newCustomerAddress.trim(),
+      sales_org: newDocType === "Sales Order" ? newSalesOrg.trim() : "",
+      distr_chan: newDocType === "Sales Order" ? newDistrChan.trim() : "",
+      division: newDocType === "Sales Order" ? newDivision.trim() : "",
+      company_code: newDocType === "Vendor Invoice" ? newCompanyCode.trim() : "",
       active: true,
       provider: "Gmail"
     };
@@ -559,7 +612,13 @@ function ManageSources() {
   const handleAddEmailOutlook = () => {
     // Save choices to session storage so we retrieve them on success callback redirect
     sessionStorage.setItem('pending_outlook_doctype', newDocType);
-    sessionStorage.setItem('pending_outlook_cc', newCompanyCode);
+    sessionStorage.setItem('pending_outlook_domain', newDomain);
+    sessionStorage.setItem('pending_outlook_customer_name', newCustomerName);
+    sessionStorage.setItem('pending_outlook_customer_address', newCustomerAddress);
+    sessionStorage.setItem('pending_outlook_sales_org', newSalesOrg);
+    sessionStorage.setItem('pending_outlook_distr_chan', newDistrChan);
+    sessionStorage.setItem('pending_outlook_division', newDivision);
+    sessionStorage.setItem('pending_outlook_company_code', newCompanyCode);
     
     toast.info("Redirecting to Microsoft secure sign-in portal...");
     window.location.href = `${API_BASE}/auth/outlook/login?redirect=true`;
@@ -570,7 +629,13 @@ function ManageSources() {
     setNewPassword("");
     setNewServer("imap.gmail.com");
     setNewDocType("Vendor Invoice");
-    setNewCompanyCode("");
+    setNewDomain("");
+    setNewCustomerName("");
+    setNewCustomerAddress("");
+    setNewSalesOrg("1010");
+    setNewDistrChan("01");
+    setNewDivision("01");
+    setNewCompanyCode("1010");
     setIsAdding(false);
     setAddStep(1);
   };
@@ -680,7 +745,7 @@ function ManageSources() {
             {addStep === 2 && (
               <div className="space-y-4">
                 <label className="text-xs font-bold text-muted-foreground uppercase block">Document Routing Rules</label>
-                <p className="text-xs text-muted-foreground mb-2">Define what document category is expected on this email channel and how it maps to your SAP organization code.</p>
+                <p className="text-xs text-muted-foreground mb-2">Define what document category is expected on this email channel and configure its domain mappings.</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-muted-foreground uppercase">Expected Doc Type</label>
@@ -694,14 +759,73 @@ function ManageSources() {
                     </select>
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-muted-foreground uppercase">SAP Company Code</label>
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase">Domain</label>
                     <input
-                      value={newCompanyCode}
-                      onChange={(e) => setNewCompanyCode(e.target.value)}
-                      placeholder="e.g. 1000"
+                      value={newDomain}
+                      onChange={(e) => setNewDomain(e.target.value)}
+                      placeholder="e.g. mygoconsulting.com"
                       className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-mono font-bold"
                     />
                   </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Name</label>
+                    <input
+                      value={newCustomerName}
+                      onChange={(e) => setNewCustomerName(e.target.value)}
+                      placeholder="e.g. Mygo Consulting Inc"
+                      className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Address (Sold to address)</label>
+                    <input
+                      value={newCustomerAddress}
+                      onChange={(e) => setNewCustomerAddress(e.target.value)}
+                      placeholder="e.g. 123 Main St, New York"
+                      className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                    />
+                  </div>
+                  {newDocType === "Sales Order" ? (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Sales Organization</label>
+                        <input
+                          value={newSalesOrg}
+                          onChange={(e) => setNewSalesOrg(e.target.value)}
+                          placeholder="e.g. 1010"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Distribution Channel</label>
+                        <input
+                          value={newDistrChan}
+                          onChange={(e) => setNewDistrChan(e.target.value)}
+                          placeholder="e.g. 01"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Division</label>
+                        <input
+                          value={newDivision}
+                          onChange={(e) => setNewDivision(e.target.value)}
+                          placeholder="e.g. 01"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-muted-foreground uppercase">Company Code</label>
+                      <input
+                        value={newCompanyCode}
+                        onChange={(e) => setNewCompanyCode(e.target.value)}
+                        placeholder="e.g. 1010"
+                        className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                      />
+                    </div>
+                  )}
                 </div>
                 <div className="flex justify-between items-center pt-2">
                   <button
@@ -733,7 +857,7 @@ function ManageSources() {
                         <label className="text-[10px] font-bold text-muted-foreground uppercase">Email Address</label>
                         <input
                           value={newEmail}
-                          onChange={(e) => setNewEmail(e.target.value)}
+                          onChange={(e) => handleEmailChange(e.target.value)}
                           placeholder="e.g. sales@company.com"
                           className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary"
                         />
@@ -781,7 +905,7 @@ function ManageSources() {
                         <Globe className="h-4 w-4" /> Secure Token-Based OAuth Redirection
                       </p>
                       <p>You will now be redirected to the secure Microsoft Account authentication landing page.</p>
-                      <p>Expected Document Type: <strong className="text-white">{newDocType}</strong> | Company Code: <strong className="text-white">{newCompanyCode || "None"}</strong></p>
+                      <p>Expected Document Type: <strong className="text-white">{newDocType}</strong> | Domain: <strong className="text-white">{newDomain || "None"}</strong> | Customer: <strong className="text-white">{newCustomerName || "None"}</strong></p>
                     </div>
                     
                     <div className="flex justify-between items-center pt-2">
@@ -827,11 +951,14 @@ function ManageSources() {
                   <tr className="bg-muted/30 border-b border-border">
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-36">Provider</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-48">Expected Type</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Co. Code</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-32">Status</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-24">Actions</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Provider</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-36">Expected Type</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Domain</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Customer Name</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-32">Customer Address</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-40">SAP Org Routing</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Status</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
@@ -877,12 +1004,77 @@ function ManageSources() {
                       </td>
                       <td className="p-4">
                         <input
-                          value={eConf.company_code || ""}
-                          onChange={(e) => handleFieldChange(eConf.id, "company_code", e.target.value)}
+                          value={eConf.domain || ""}
+                          onChange={(e) => handleFieldChange(eConf.id, "domain", e.target.value)}
                           onBlur={handleBlurSave}
                           placeholder="—"
-                          className="w-20 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary font-mono text-center font-bold text-xs shadow-inner"
+                          className="w-24 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary font-mono text-center text-xs shadow-inner"
                         />
+                      </td>
+                      <td className="p-4">
+                        <input
+                          value={eConf.customer_name || ""}
+                          onChange={(e) => handleFieldChange(eConf.id, "customer_name", e.target.value)}
+                          onBlur={handleBlurSave}
+                          placeholder="—"
+                          className="w-24 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner"
+                        />
+                      </td>
+                      <td className="p-4">
+                        <input
+                          value={eConf.customer_address || ""}
+                          onChange={(e) => handleFieldChange(eConf.id, "customer_address", e.target.value)}
+                          onBlur={handleBlurSave}
+                          placeholder="—"
+                          className="w-28 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner"
+                        />
+                      </td>
+                      <td className="p-4">
+                        {eConf.expected_doc_type === "Sales Order" ? (
+                          <div className="flex gap-1">
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-[7px] font-bold text-muted-foreground uppercase">Sales Org</span>
+                              <input
+                                value={eConf.sales_org || ""}
+                                onChange={(e) => handleFieldChange(eConf.id, "sales_org", e.target.value)}
+                                onBlur={handleBlurSave}
+                                placeholder="1010"
+                                className="w-12 h-7 px-1 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center font-mono text-[10px]"
+                              />
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-[7px] font-bold text-muted-foreground uppercase">Dist Ch</span>
+                              <input
+                                value={eConf.distr_chan || ""}
+                                onChange={(e) => handleFieldChange(eConf.id, "distr_chan", e.target.value)}
+                                onBlur={handleBlurSave}
+                                placeholder="01"
+                                className="w-10 h-7 px-1 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center font-mono text-[10px]"
+                              />
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-[7px] font-bold text-muted-foreground uppercase">Div</span>
+                              <input
+                                value={eConf.division || ""}
+                                onChange={(e) => handleFieldChange(eConf.id, "division", e.target.value)}
+                                onBlur={handleBlurSave}
+                                placeholder="01"
+                                className="w-10 h-7 px-1 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center font-mono text-[10px]"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[7px] font-bold text-muted-foreground uppercase">Co Code</span>
+                            <input
+                              value={eConf.company_code || ""}
+                              onChange={(e) => handleFieldChange(eConf.id, "company_code", e.target.value)}
+                              onBlur={handleBlurSave}
+                              placeholder="1010"
+                              className="w-20 h-7 px-1.5 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center font-mono text-[10px]"
+                            />
+                          </div>
+                        )}
                       </td>
                       <td className="p-4">
                         {emailStatus[eConf.email] === "Pending" ? (
@@ -1659,6 +1851,138 @@ function BusinessPartnerMappings() {
         >
           <Save className="h-4 w-4" />
           {isSaving ? "Saving..." : "Save Mappings"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PriceDeterminationSettings() {
+  const [customerRequestedPrice, setCustomerRequestedPrice] = useState("");
+  const [calculatePriceFormula, setCalculatePriceFormula] = useState(true);
+  const [priceFormulaType, setPriceFormulaType] = useState("amount_times_qty");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.customer_requested_price !== undefined) {
+          setCustomerRequestedPrice(data.customer_requested_price);
+        }
+        if (data.calculate_price_formula !== undefined) {
+          setCalculatePriceFormula(data.calculate_price_formula);
+        }
+        if (data.price_formula_type !== undefined) {
+          setPriceFormulaType(data.price_formula_type);
+        }
+      })
+      .catch(() => {
+        toast.error("Failed to load settings data");
+      });
+  }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/pricing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customer_requested_price: customerRequestedPrice,
+          calculate_price_formula: calculatePriceFormula,
+          price_formula_type: priceFormulaType,
+        }),
+      });
+      if (res.ok) {
+        toast.success("Pricing preferences saved successfully");
+      } else {
+        throw new Error("Save failed");
+      }
+    } catch (err) {
+      toast.error("Failed to save pricing settings");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div>
+        <h2 className="text-2xl font-bold mb-1">Price Determination</h2>
+        <p className="text-muted-foreground text-sm font-medium">Configure fallback pricing and calculations when line-item prices are missing from documents</p>
+      </div>
+
+      <div className="bg-card border border-border rounded-xl p-6 space-y-6 shadow-sm">
+        {/* Customer Requested Price Config */}
+        <div className="space-y-2">
+          <label className="text-xs font-bold uppercase tracking-wider text-primary block">
+            Default Customer Requested Price
+          </label>
+          <div className="relative max-w-sm">
+            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="e.g. 150.00 (leave blank to disable)"
+              value={customerRequestedPrice}
+              onChange={(e) => setCustomerRequestedPrice(e.target.value)}
+              className="pl-9 pr-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
+            If configured, this fixed rate will automatically override or populate any empty line-item unit prices before payload construction.
+          </p>
+        </div>
+
+        <hr className="border-border/60" />
+
+        {/* Dynamic Formula Enable Toggle */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-0.5">
+            <label className="text-xs font-bold uppercase tracking-wider text-foreground block">
+              Calculate Missing Price Using Formula
+            </label>
+            <span className="text-[11px] text-muted-foreground leading-normal block max-w-xl">
+              If no unit price is specified in the document and no Customer Requested Price is configured, automatically calculate the price using the selected mathematical formula.
+            </span>
+          </div>
+          <input
+            type="checkbox"
+            checked={calculatePriceFormula}
+            onChange={(e) => setCalculatePriceFormula(e.target.checked)}
+            className="w-4 h-4 rounded text-primary focus:ring-primary border-border mt-1"
+          />
+        </div>
+
+        {/* Formula Selector (Only visible if formula checked) */}
+        {calculatePriceFormula && (
+          <div className="space-y-2 max-w-sm animate-in slide-in-from-top-1 duration-200 ml-1 pl-4 border-l-2 border-primary/20">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+              Mathematical Formula Layout
+            </label>
+            <select
+              value={priceFormulaType}
+              onChange={(e) => setPriceFormulaType(e.target.value)}
+              className="w-full h-10 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none font-bold"
+            >
+              <option value="amount_times_qty">Amount * Quantity (Standard Request)</option>
+              <option value="amount_divided_by_qty">Amount / Quantity (Mathematical Unit Price)</option>
+            </select>
+            <p className="text-[10px] text-muted-foreground italic">
+              Selected formula will resolve dynamically at execution time.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="flex justify-end gap-3">
+        <button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex items-center gap-1.5 px-5 py-2.5 bg-primary text-primary-foreground text-xs font-bold rounded-xl hover:shadow-md transition-all active:scale-95 disabled:opacity-50"
+        >
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving Settings..." : "Save pricing configuration"}
         </button>
       </div>
     </div>
