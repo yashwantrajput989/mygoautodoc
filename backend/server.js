@@ -1056,10 +1056,9 @@ async function enrichDocumentWithApis(docData) {
         docData.line_items = docData.line_items.map((item, idx) => {
             const updatedItem = { ...item };
             
-            // Item number
-            if (!updatedItem.item_number) {
-                updatedItem.item_number = isSalesOrder ? String((idx + 1) * 10) : String(idx + 1);
-            }
+            // Item number — always normalize to SAP format (10, 20, 30...) regardless of AI-extracted value
+            // SAP requires item positions in multiples of 10 for both Sales Orders and Vendor Invoices
+            updatedItem.item_number = String((idx + 1) * 10);
             
             // Material description
             if (!updatedItem.material_description) {
@@ -1138,7 +1137,7 @@ async function enrichDocumentWithApis(docData) {
     } else {
         // If line items is empty, we must create at least one dummy line item!
         docData.line_items = [{
-            item_number: isSalesOrder ? "10" : "1",
+            item_number: "10",
             material_description: "ARFL100AM - Material Desc",
             customer_material_number: "ARFL100AM",
             supplier_material_number: "ARFL100AM",
@@ -2639,7 +2638,7 @@ function buildSAPPayload(docData, settings) {
                 itemPayload.RequestedQuantity = "1";
                 itemPayload.RequestedQuantityUnit = "EA";
             } else {
-                itemPayload.SupplierInvoiceItem = item.item_number || String(index + 1);
+                itemPayload.SupplierInvoiceItem = item.item_number || String((index + 1) * 10);
                 itemPayload.Quantity = "1";
                 itemPayload.UnitOfMeasure = "EA";
             }
