@@ -1947,6 +1947,20 @@ app.delete('/api/documents/:id', async (req, res) => {
                 await storageService.deleteFile('trash_docs', `${id}${ext}`);
             }
             await storageService.deleteFile('trash_json', `${id}.json`);
+
+            try {
+                const settings = await getSettings();
+                if (!settings.permanently_deleted_ids) {
+                    settings.permanently_deleted_ids = [];
+                }
+                if (!settings.permanently_deleted_ids.includes(id)) {
+                    settings.permanently_deleted_ids.push(id);
+                    await saveSettings(settings);
+                }
+            } catch (err) {
+                console.error("Error saving permanently deleted ID:", err.message);
+            }
+
             return res.json({ success: true, message: `Document ${id} permanently deleted` });
         }
 
@@ -3299,10 +3313,13 @@ async function runGmailSync(settings, isFirstSync) {
                         pdfFound = true;
 
                         const uniqueFilename = `${seqno}_${att.filename}`;
+                        const docId = path.parse(uniqueFilename).name;
+                        if (settings.permanently_deleted_ids && settings.permanently_deleted_ids.includes(docId)) continue;
 
                         if (await storageService.existsFile('downloads', uniqueFilename) ||
                             await storageService.existsFile('sap_docs', uniqueFilename) ||
-                            await storageService.existsFile('archive_junk', uniqueFilename)) continue;
+                            await storageService.existsFile('archive_junk', uniqueFilename) ||
+                            await storageService.existsFile('trash_docs', uniqueFilename)) continue;
 
                         await storageService.saveFile('downloads', uniqueFilename, att.content);
 
@@ -3340,10 +3357,14 @@ async function runGmailSync(settings, isFirstSync) {
                             console.log(`✨ [Sync] Keyword matched in body: "${matchedKeyword}"! Ingesting body-only email.`);
 
                             const uniqueFilename = `body_${seqno}.pdf`;
+                            const docId = path.parse(uniqueFilename).name;
+                            const isPermanentlyDeleted = settings.permanently_deleted_ids && settings.permanently_deleted_ids.includes(docId);
 
-                            if (!await storageService.existsFile('downloads', uniqueFilename) &&
+                            if (!isPermanentlyDeleted &&
+                                !await storageService.existsFile('downloads', uniqueFilename) &&
                                 !await storageService.existsFile('sap_docs', uniqueFilename) &&
-                                !await storageService.existsFile('archive_junk', uniqueFilename)) {
+                                !await storageService.existsFile('archive_junk', uniqueFilename) &&
+                                !await storageService.existsFile('trash_docs', uniqueFilename)) {
 
                                 await storageService.saveFile('downloads', uniqueFilename, Buffer.from(`EMAIL_BODY_ONLY:${matchedKeyword}`));
 
@@ -3625,10 +3646,13 @@ async function runOutlookSync(isFirstSync) {
 
                         const safeId = msgId.slice(-12);
                         const uniqueFilename = `${safeId}_${att.name}`;
+                        const docId = path.parse(uniqueFilename).name;
+                        if (settings.permanently_deleted_ids && settings.permanently_deleted_ids.includes(docId)) continue;
 
                         if (await storageService.existsFile('downloads', uniqueFilename) ||
                             await storageService.existsFile('sap_docs', uniqueFilename) ||
-                            await storageService.existsFile('archive_junk', uniqueFilename)) continue;
+                            await storageService.existsFile('archive_junk', uniqueFilename) ||
+                            await storageService.existsFile('trash_docs', uniqueFilename)) continue;
 
                         if (att.contentBytes) {
                             await storageService.saveFile('downloads', uniqueFilename, Buffer.from(att.contentBytes, 'base64'));
@@ -3703,10 +3727,14 @@ async function runOutlookSync(isFirstSync) {
 
                         const safeId = msgId.slice(-12);
                         const uniqueFilename = `body_${safeId}.pdf`;
+                        const docId = path.parse(uniqueFilename).name;
+                        const isPermanentlyDeleted = settings.permanently_deleted_ids && settings.permanently_deleted_ids.includes(docId);
 
-                        if (!await storageService.existsFile('downloads', uniqueFilename) &&
+                        if (!isPermanentlyDeleted &&
+                            !await storageService.existsFile('downloads', uniqueFilename) &&
                             !await storageService.existsFile('sap_docs', uniqueFilename) &&
-                            !await storageService.existsFile('archive_junk', uniqueFilename)) {
+                            !await storageService.existsFile('archive_junk', uniqueFilename) &&
+                            !await storageService.existsFile('trash_docs', uniqueFilename)) {
 
                             await storageService.saveFile('downloads', uniqueFilename, Buffer.from(`EMAIL_BODY_ONLY:${matchedKeyword}`));
 
