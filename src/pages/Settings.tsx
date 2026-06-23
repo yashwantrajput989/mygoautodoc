@@ -444,6 +444,44 @@ function ManageSources() {
     }
   };
 
+  const [isFetchingWizardAddress, setIsFetchingWizardAddress] = useState(false);
+
+  const handleFetchWizardAddress = async () => {
+    if (!newCustomerName.trim()) {
+      toast.error("Please enter a Customer Name/Number first");
+      return;
+    }
+    setIsFetchingWizardAddress(true);
+    try {
+      const res = await fetch(`${API_BASE}/sap/business-partner?query=${encodeURIComponent(newCustomerName.trim())}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to fetch Business Partner from SAP");
+      }
+      
+      const addrList = data.to_BusinessPartnerAddress?.results || data.to_BusinessPartnerAddress || [];
+      const addr = Array.isArray(addrList) ? addrList[0] : addrList;
+      if (!addr) {
+        toast.warning("No address record found in SAP for this Business Partner");
+        setNewCustomerAddress("No Address Record in SAP");
+        return;
+      }
+      const street = addr.StreetName || addr.Street || '';
+      const city = addr.CityName || addr.City || '';
+      const postal = addr.PostalCode || '';
+      const country = addr.Country || '';
+      const formattedAddr = [street, city, postal, country].filter(Boolean).join(', ');
+      
+      setNewCustomerAddress(formattedAddr || "No Address Record in SAP");
+      toast.success("Customer address successfully loaded from SAP!");
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || "Failed to fetch customer address from SAP");
+    } finally {
+      setIsFetchingWizardAddress(false);
+    }
+  };
+
   const handleEmailChange = (val: string) => {
     setNewEmail(val);
   };
@@ -765,20 +803,35 @@ function ManageSources() {
                   {newDocType === "Vendor Invoice" ? (
                     <>
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Name</label>
-                        <input
-                          value={newCustomerName}
-                          onChange={(e) => setNewCustomerName(e.target.value)}
-                          placeholder="e.g. Mygo Consulting Inc"
-                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                        />
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Name / ID</label>
+                        <div className="flex gap-2">
+                          <input
+                            value={newCustomerName}
+                            onChange={(e) => setNewCustomerName(e.target.value)}
+                            placeholder="e.g. C00003 or Apothekare"
+                            className="flex-1 h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleFetchWizardAddress}
+                            disabled={isFetchingWizardAddress}
+                            className="px-4 h-10 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                          >
+                            {isFetchingWizardAddress ? (
+                              <Activity className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Globe className="h-3.5 w-3.5" />
+                            )}
+                            Fetch Address
+                          </button>
+                        </div>
                       </div>
                       <div className="space-y-1.5">
                         <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Address (Sold to address)</label>
                         <input
                           value={newCustomerAddress}
                           onChange={(e) => setNewCustomerAddress(e.target.value)}
-                          placeholder="e.g. 123 Main St, New York"
+                          placeholder="Will be auto-filled or type manually"
                           className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
                         />
                       </div>
