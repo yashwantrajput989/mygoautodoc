@@ -408,8 +408,6 @@ function ManageSources() {
   const [newCustomerAddress, setNewCustomerAddress] = useState("");
   const [newSalesOrg, setNewSalesOrg] = useState("1010");
   const [newDistrChan, setNewDistrChan] = useState("01");
-  const [newDivision, setNewDivision] = useState("01");
-  const [newCompanyCode, setNewCompanyCode] = useState("1010");
   
   // Testing connection state map: email -> boolean
   const [isTestingEmail, setIsTestingEmail] = useState<Record<string, boolean>>({});
@@ -469,8 +467,6 @@ function ManageSources() {
           const pendingCustomerAddress = sessionStorage.getItem('pending_outlook_customer_address') || '';
           const pendingSalesOrg = sessionStorage.getItem('pending_outlook_sales_org') || '';
           const pendingDistrChan = sessionStorage.getItem('pending_outlook_distr_chan') || '';
-          const pendingDivision = sessionStorage.getItem('pending_outlook_division') || '';
-          const pendingCompanyCode = sessionStorage.getItem('pending_outlook_company_code') || '';
           
           const newOutlookEmail = {
             id: Date.now(),
@@ -479,12 +475,12 @@ function ManageSources() {
             outlook_tokens: data.outlook_tokens,
             expected_doc_type: pendingType,
             domain: pendingDomain,
-            customer_name: pendingCustomerName,
-            customer_address: pendingCustomerAddress,
+            customer_name: pendingType === "Vendor Invoice" ? pendingCustomerName : "",
+            customer_address: pendingType === "Vendor Invoice" ? pendingCustomerAddress : "",
             sales_org: pendingType === "Sales Order" ? pendingSalesOrg : "",
             distr_chan: pendingType === "Sales Order" ? pendingDistrChan : "",
-            division: pendingType === "Sales Order" ? pendingDivision : "",
-            company_code: pendingType === "Vendor Invoice" ? pendingCompanyCode : "",
+            division: "",
+            company_code: "",
             active: true
           };
 
@@ -595,12 +591,12 @@ function ManageSources() {
       server: newServer.trim() || "imap.gmail.com",
       expected_doc_type: newDocType,
       domain: newDomain.trim(),
-      customer_name: newCustomerName.trim(),
-      customer_address: newCustomerAddress.trim(),
+      customer_name: newDocType === "Vendor Invoice" ? newCustomerName.trim() : "",
+      customer_address: newDocType === "Vendor Invoice" ? newCustomerAddress.trim() : "",
       sales_org: newDocType === "Sales Order" ? newSalesOrg.trim() : "",
       distr_chan: newDocType === "Sales Order" ? newDistrChan.trim() : "",
-      division: newDocType === "Sales Order" ? newDivision.trim() : "",
-      company_code: newDocType === "Vendor Invoice" ? newCompanyCode.trim() : "",
+      division: "",
+      company_code: "",
       active: true,
       provider: "Gmail"
     };
@@ -613,12 +609,12 @@ function ManageSources() {
     // Save choices to session storage so we retrieve them on success callback redirect
     sessionStorage.setItem('pending_outlook_doctype', newDocType);
     sessionStorage.setItem('pending_outlook_domain', newDomain);
-    sessionStorage.setItem('pending_outlook_customer_name', newCustomerName);
-    sessionStorage.setItem('pending_outlook_customer_address', newCustomerAddress);
-    sessionStorage.setItem('pending_outlook_sales_org', newSalesOrg);
-    sessionStorage.setItem('pending_outlook_distr_chan', newDistrChan);
-    sessionStorage.setItem('pending_outlook_division', newDivision);
-    sessionStorage.setItem('pending_outlook_company_code', newCompanyCode);
+    sessionStorage.setItem('pending_outlook_customer_name', newDocType === "Vendor Invoice" ? newCustomerName : "");
+    sessionStorage.setItem('pending_outlook_customer_address', newDocType === "Vendor Invoice" ? newCustomerAddress : "");
+    sessionStorage.setItem('pending_outlook_sales_org', newDocType === "Sales Order" ? newSalesOrg : "");
+    sessionStorage.setItem('pending_outlook_distr_chan', newDocType === "Sales Order" ? newDistrChan : "");
+    sessionStorage.setItem('pending_outlook_division', "");
+    sessionStorage.setItem('pending_outlook_company_code', "");
     
     toast.info("Redirecting to Microsoft secure sign-in portal...");
     window.location.href = `${API_BASE}/auth/outlook/login?redirect=true`;
@@ -634,8 +630,6 @@ function ManageSources() {
     setNewCustomerAddress("");
     setNewSalesOrg("1010");
     setNewDistrChan("01");
-    setNewDivision("01");
-    setNewCompanyCode("1010");
     setIsAdding(false);
     setAddStep(1);
   };
@@ -767,25 +761,28 @@ function ManageSources() {
                       className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-mono font-bold"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Name</label>
-                    <input
-                      value={newCustomerName}
-                      onChange={(e) => setNewCustomerName(e.target.value)}
-                      placeholder="e.g. Mygo Consulting Inc"
-                      className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Address (Sold to address)</label>
-                    <input
-                      value={newCustomerAddress}
-                      onChange={(e) => setNewCustomerAddress(e.target.value)}
-                      placeholder="e.g. 123 Main St, New York"
-                      className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                    />
-                  </div>
-                  {newDocType === "Sales Order" ? (
+                  {newDocType === "Vendor Invoice" ? (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Name</label>
+                        <input
+                          value={newCustomerName}
+                          onChange={(e) => setNewCustomerName(e.target.value)}
+                          placeholder="e.g. Mygo Consulting Inc"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Address (Sold to address)</label>
+                        <input
+                          value={newCustomerAddress}
+                          onChange={(e) => setNewCustomerAddress(e.target.value)}
+                          placeholder="e.g. 123 Main St, New York"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
+                        />
+                      </div>
+                    </>
+                  ) : (
                     <>
                       <div className="space-y-1.5">
                         <label className="text-[10px] font-bold text-muted-foreground uppercase">Sales Organization</label>
@@ -805,26 +802,7 @@ function ManageSources() {
                           className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
                         />
                       </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Division</label>
-                        <input
-                          value={newDivision}
-                          onChange={(e) => setNewDivision(e.target.value)}
-                          placeholder="e.g. 01"
-                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                        />
-                      </div>
                     </>
-                  ) : (
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-muted-foreground uppercase">Company Code</label>
-                      <input
-                        value={newCompanyCode}
-                        onChange={(e) => setNewCompanyCode(e.target.value)}
-                        placeholder="e.g. 1010"
-                        className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                      />
-                    </div>
                   )}
                 </div>
                 <div className="flex justify-between items-center pt-2">
@@ -937,14 +915,16 @@ function ManageSources() {
           </div>
         )}
 
-        {/* Unified Email channels list view */}
-        <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40 backdrop-blur-sm shadow-lg">
+        {/* Vendor Invoice Integration Channels */}
+        <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40 backdrop-blur-sm shadow-lg mb-6">
           <div className="p-4 border-b border-border bg-muted/20 flex items-center justify-between">
-            <span className="text-xs font-bold text-foreground">Added Email Integration Channels</span>
-            <span className="text-[10px] text-muted-foreground font-semibold">{emails.length} channels configured</span>
+            <span className="text-xs font-bold text-foreground">Vendor Invoice Integration Channels</span>
+            <span className="text-[10px] text-muted-foreground font-semibold">
+              {emails.filter(e => e.expected_doc_type !== "Sales Order").length} channels configured
+            </span>
           </div>
 
-          {emails.length > 0 ? (
+          {emails.filter(e => e.expected_doc_type !== "Sales Order").length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left border-collapse">
                 <thead>
@@ -952,17 +932,15 @@ function ManageSources() {
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Provider</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-36">Expected Type</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Domain</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Customer Name</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-32">Customer Address</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-40">SAP Org Routing</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-36">Customer Name</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-40">Customer Address</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Status</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
-                  {emails.map((eConf) => (
+                  {emails.filter(e => e.expected_doc_type !== "Sales Order").map((eConf) => (
                     <tr key={eConf.id} className="hover:bg-muted/10 transition-colors">
                       <td className="p-4">
                         <input
@@ -990,19 +968,6 @@ function ManageSources() {
                         )}
                       </td>
                       <td className="p-4">
-                        <select
-                          value={eConf.expected_doc_type || "Invoice"}
-                          onChange={(e) => {
-                            handleFieldChange(eConf.id, "expected_doc_type", e.target.value);
-                            setTimeout(handleBlurSave, 100);
-                          }}
-                          className="h-8 px-2.5 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary w-40 font-medium text-xs shadow-inner"
-                        >
-                          <option value="Vendor Invoice">Vendor Invoice</option>
-                          <option value="Sales Order">Sales Order</option>
-                        </select>
-                      </td>
-                      <td className="p-4">
                         <input
                           value={eConf.domain || ""}
                           onChange={(e) => handleFieldChange(eConf.id, "domain", e.target.value)}
@@ -1017,7 +982,7 @@ function ManageSources() {
                           onChange={(e) => handleFieldChange(eConf.id, "customer_name", e.target.value)}
                           onBlur={handleBlurSave}
                           placeholder="—"
-                          className="w-24 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner"
+                          className="w-32 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner"
                         />
                       </td>
                       <td className="p-4">
@@ -1026,55 +991,8 @@ function ManageSources() {
                           onChange={(e) => handleFieldChange(eConf.id, "customer_address", e.target.value)}
                           onBlur={handleBlurSave}
                           placeholder="—"
-                          className="w-28 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner"
+                          className="w-36 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner"
                         />
-                      </td>
-                      <td className="p-4">
-                        {eConf.expected_doc_type === "Sales Order" ? (
-                          <div className="flex gap-1">
-                            <div className="flex flex-col gap-0.5">
-                              <span className="text-[7px] font-bold text-muted-foreground uppercase">Sales Org</span>
-                              <input
-                                value={eConf.sales_org || ""}
-                                onChange={(e) => handleFieldChange(eConf.id, "sales_org", e.target.value)}
-                                onBlur={handleBlurSave}
-                                placeholder="1010"
-                                className="w-12 h-7 px-1 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center font-mono text-[10px]"
-                              />
-                            </div>
-                            <div className="flex flex-col gap-0.5">
-                              <span className="text-[7px] font-bold text-muted-foreground uppercase">Dist Ch</span>
-                              <input
-                                value={eConf.distr_chan || ""}
-                                onChange={(e) => handleFieldChange(eConf.id, "distr_chan", e.target.value)}
-                                onBlur={handleBlurSave}
-                                placeholder="01"
-                                className="w-10 h-7 px-1 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center font-mono text-[10px]"
-                              />
-                            </div>
-                            <div className="flex flex-col gap-0.5">
-                              <span className="text-[7px] font-bold text-muted-foreground uppercase">Div</span>
-                              <input
-                                value={eConf.division || ""}
-                                onChange={(e) => handleFieldChange(eConf.id, "division", e.target.value)}
-                                onBlur={handleBlurSave}
-                                placeholder="01"
-                                className="w-10 h-7 px-1 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center font-mono text-[10px]"
-                              />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-[7px] font-bold text-muted-foreground uppercase">Co Code</span>
-                            <input
-                              value={eConf.company_code || ""}
-                              onChange={(e) => handleFieldChange(eConf.id, "company_code", e.target.value)}
-                              onBlur={handleBlurSave}
-                              placeholder="1010"
-                              className="w-20 h-7 px-1.5 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center font-mono text-[10px]"
-                            />
-                          </div>
-                        )}
                       </td>
                       <td className="p-4">
                         {emailStatus[eConf.email] === "Pending" ? (
@@ -1116,10 +1034,135 @@ function ManageSources() {
               </table>
             </div>
           ) : (
-            <div className="p-12 text-center text-muted-foreground">
-              <Mail className="h-10 w-10 mx-auto opacity-30 mb-3 text-primary" />
-              <p className="text-sm font-bold text-foreground">No active email channel sources</p>
-              <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">Click "Add Email Channel" at the top to configure your first Gmail/IMAP server or Outlook Graph API sync.</p>
+            <div className="p-8 text-center text-muted-foreground">
+              <Mail className="h-8 w-8 mx-auto opacity-30 mb-2 text-primary" />
+              <p className="text-xs font-bold text-foreground">No active Vendor Invoice integration channels</p>
+            </div>
+          )}
+        </div>
+
+        {/* Sales Order Integration Channels */}
+        <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40 backdrop-blur-sm shadow-lg">
+          <div className="p-4 border-b border-border bg-muted/20 flex items-center justify-between">
+            <span className="text-xs font-bold text-foreground">Sales Order Integration Channels</span>
+            <span className="text-[10px] text-muted-foreground font-semibold">
+              {emails.filter(e => e.expected_doc_type === "Sales Order").length} channels configured
+            </span>
+          </div>
+
+          {emails.filter(e => e.expected_doc_type === "Sales Order").length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-muted/30 border-b border-border">
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Provider</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Domain</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-36">Sales Organization</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-40">Distribution Channel</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Status</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-20">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {emails.filter(e => e.expected_doc_type === "Sales Order").map((eConf) => (
+                    <tr key={eConf.id} className="hover:bg-muted/10 transition-colors">
+                      <td className="p-4">
+                        <input
+                          type="checkbox"
+                          checked={eConf.active !== false}
+                          onChange={() => handleToggleEmail(eConf.id)}
+                          className="rounded border-border cursor-pointer text-primary w-4 h-4 bg-background outline-none focus:ring-1 focus:ring-primary"
+                        />
+                      </td>
+                      <td className="p-4">
+                        <div className="font-bold text-foreground text-sm">{eConf.email}</div>
+                        <div className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                          {eConf.provider === "Outlook" ? "Microsoft Graph Cloud Sync" : eConf.server}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        {eConf.provider === "Outlook" ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-bold text-blue-400 shadow-sm">
+                            <Globe className="h-3 w-3" /> Outlook
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-400 shadow-sm">
+                            <Mail className="h-3 w-3" /> Gmail / IMAP
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        <input
+                          value={eConf.domain || ""}
+                          onChange={(e) => handleFieldChange(eConf.id, "domain", e.target.value)}
+                          onBlur={handleBlurSave}
+                          placeholder="—"
+                          className="w-24 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary font-mono text-center text-xs shadow-inner"
+                        />
+                      </td>
+                      <td className="p-4">
+                        <input
+                          value={eConf.sales_org || ""}
+                          onChange={(e) => handleFieldChange(eConf.id, "sales_org", e.target.value)}
+                          onBlur={handleBlurSave}
+                          placeholder="1010"
+                          className="w-32 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner font-mono font-bold"
+                        />
+                      </td>
+                      <td className="p-4">
+                        <input
+                          value={eConf.distr_chan || ""}
+                          onChange={(e) => handleFieldChange(eConf.id, "distr_chan", e.target.value)}
+                          onBlur={handleBlurSave}
+                          placeholder="01"
+                          className="w-36 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner font-mono font-bold"
+                        />
+                      </td>
+                      <td className="p-4">
+                        {emailStatus[eConf.email] === "Pending" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-bold text-amber-400">
+                            <Activity className="h-3 w-3 animate-spin" /> Verifying
+                          </span>
+                        ) : emailStatus[eConf.email] === "Connected" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Active
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> Disconnected
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {eConf.provider !== "Outlook" && (
+                            <button
+                              onClick={() => handleTestEmail(eConf)}
+                              disabled={isTestingEmail[eConf.email]}
+                              className="px-2.5 py-1 text-[10px] font-bold text-primary border border-primary/20 hover:border-primary/50 bg-primary/5 hover:bg-primary/10 rounded-lg transition-all disabled:opacity-50"
+                            >
+                              Test
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteEmail(eConf.id)}
+                            className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-all"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-8 text-center text-muted-foreground">
+              <Mail className="h-8 w-8 mx-auto opacity-30 mb-2 text-primary" />
+              <p className="text-xs font-bold text-foreground">No active Sales Order integration channels</p>
             </div>
           )}
         </div>
