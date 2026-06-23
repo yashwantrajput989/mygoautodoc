@@ -2418,14 +2418,24 @@ function buildSAPPayload(docData, settings) {
 
         const payload = {};
 
-        // Define default values for standard fields if not mapped
-        if (btpConfig.context === 'SalesOrder') {
+        const resolvedContext = btpConfig.context || (btpConfig.endpoint && btpConfig.endpoint.toLowerCase().includes('sales-order') ? 'SalesOrder' : btpConfig.endpoint && btpConfig.endpoint.toLowerCase().includes('supplier-invoice') ? 'VendorInvoice' : 'SalesOrder');
+
+        // Define values for standard fields only if present in header (no default fallbacks like "1010" or "01")
+        if (resolvedContext === 'SalesOrder') {
             payload.SalesOrderType = "OR1";
-            payload.SalesOrganization = docData.header?.sales_organization || "1010";
-            payload.DistributionChannel = docData.header?.distribution_channel || "01";
-            payload.OrganizationDivision = docData.header?.division || "01";
+            if (docData.header?.sales_organization) {
+                payload.SalesOrganization = docData.header.sales_organization;
+            }
+            if (docData.header?.distribution_channel) {
+                payload.DistributionChannel = docData.header.distribution_channel;
+            }
+            if (docData.header?.division) {
+                payload.OrganizationDivision = docData.header.division;
+            }
         } else {
-            payload.CompanyCode = docData.header?.company_code || "1010";
+            if (docData.header?.company_code) {
+                payload.CompanyCode = docData.header.company_code;
+            }
         }
 
         // Header & Footer mapping
@@ -2451,8 +2461,11 @@ function buildSAPPayload(docData, settings) {
         // Line items mapping
         const lineItems = (docData.line_items || []).map((item, index) => {
             const itemPayload = {};
-            if (btpConfig.context === 'SalesOrder') {
-                itemPayload.ProductionPlant = "1010";
+            const resolvedContext = btpConfig.context || (btpConfig.endpoint && btpConfig.endpoint.toLowerCase().includes('sales-order') ? 'SalesOrder' : btpConfig.endpoint && btpConfig.endpoint.toLowerCase().includes('supplier-invoice') ? 'VendorInvoice' : 'SalesOrder');
+            if (resolvedContext === 'SalesOrder') {
+                if (item.plant || docData.header?.plant) {
+                    itemPayload.ProductionPlant = item.plant || docData.header?.plant;
+                }
                 itemPayload.SalesOrderItem = item.item_number || String((index + 1) * 10);
                 itemPayload.Material = "ARFL100AM";
                 itemPayload.RequestedQuantity = "1";
@@ -2521,13 +2534,16 @@ function buildSAPPayload(docData, settings) {
             const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, defaultMat);
             const uom = item.unit_of_measure || "EA";
 
-            return {
+            const itemPayload = {
                 SalesOrderItem: itemNum,
                 Material: material,
                 RequestedQuantity: qty,
-                RequestedQuantityUnit: uom,
-                ProductionPlant: "1010"
+                RequestedQuantityUnit: uom
             };
+            if (item.plant || docData.header?.plant) {
+                itemPayload.ProductionPlant = item.plant || docData.header?.plant;
+            }
+            return itemPayload;
         });
 
         if (lineItems.length === 0) {
@@ -2547,9 +2563,9 @@ function buildSAPPayload(docData, settings) {
 
         return {
             SalesOrderType: "OR1",
-            SalesOrganization: docData.header?.sales_organization || "1010",
-            DistributionChannel: docData.header?.distribution_channel || "01",
-            OrganizationDivision: docData.header?.division || "01",
+            ...(docData.header?.sales_organization ? { SalesOrganization: docData.header.sales_organization } : {}),
+            ...(docData.header?.distribution_channel ? { DistributionChannel: docData.header.distribution_channel } : {}),
+            ...(docData.header?.division ? { OrganizationDivision: docData.header.division } : {}),
             SoldToParty: btpSoldTo,
             PurchaseOrderByCustomer: poNum,
             SalesOrderDate: btpDate,
@@ -2600,9 +2616,9 @@ function buildSAPPayload(docData, settings) {
 
         return {
             Doc_typ: "OR1",
-            Sales_org: docData.header?.sales_organization || "1010",
-            Distr_chan: docData.header?.distribution_channel || "01",
-            Division: docData.header?.division || "01",
+            ...(docData.header?.sales_organization ? { Sales_org: docData.header.sales_organization } : {}),
+            ...(docData.header?.distribution_channel ? { Distr_chan: docData.header.distribution_channel } : {}),
+            ...(docData.header?.division ? { Division: docData.header.division } : {}),
             Sold_to_party: soldToParty.length > 10 ? "BP-CUST" : soldToParty,
             Ship_to_party: shipToParty.length > 10 ? "BP-CUST" : shipToParty,
             Bill_to_party: soldToParty.length > 10 ? "BP-CUST" : soldToParty,
