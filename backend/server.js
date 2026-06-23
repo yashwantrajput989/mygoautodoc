@@ -2634,7 +2634,7 @@ function buildSAPPayload(docData, settings) {
                     itemPayload.ProductionPlant = item.plant || docData.header?.plant;
                 }
                 itemPayload.SalesOrderItem = item.item_number || String((index + 1) * 10);
-                itemPayload.Material = "ARFL100AM";
+                itemPayload.MaterialEntered = "ARFL100AM";
                 itemPayload.RequestedQuantity = "1";
                 itemPayload.RequestedQuantityUnit = "EA";
             } else {
@@ -2648,7 +2648,7 @@ function buildSAPPayload(docData, settings) {
                 if (isItemSource) {
                     let val = item[m.sourceField] || "";
 
-                    if (m.targetField === 'Material' || m.targetField === 'Material1') {
+                    if (m.targetField === 'MaterialEntered' || m.targetField === 'Material' || m.targetField === 'Material1') {
                         if (m.sourceField === 'material_description') {
                             val = extractMaterial(val, "");
                         }
@@ -2703,7 +2703,7 @@ function buildSAPPayload(docData, settings) {
 
             const itemPayload = {
                 SalesOrderItem: itemNum,
-                Material: material,
+                MaterialEntered: material,
                 RequestedQuantity: qty,
                 RequestedQuantityUnit: uom
             };
@@ -2716,7 +2716,7 @@ function buildSAPPayload(docData, settings) {
         if (lineItems.length === 0) {
             lineItems.push({
                 SalesOrderItem: "10",
-                Material: "ARFL100AM",
+                MaterialEntered: "ARFL100AM",
                 RequestedQuantity: "2",
                 RequestedQuantityUnit: "EA",
                 ProductionPlant: "1010"
