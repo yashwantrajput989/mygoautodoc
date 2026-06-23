@@ -1133,6 +1133,97 @@ app.post('/api/settings/ai', async (req, res) => {
     res.json({ message: `${provider} settings updated successfully` });
 });
 
+app.post('/api/settings/ai/models', async (req, res) => {
+    const { provider, api_key } = req.body;
+    if (!provider) {
+        return res.status(400).json({ error: "Provider is required" });
+    }
+
+    let apiKey = api_key;
+    const settings = await getSettings();
+    const providerLower = provider === "Claude" ? "anthropic" : provider.toLowerCase();
+
+    if (!apiKey || apiKey === '********') {
+        apiKey = settings[`${providerLower}_api_key`];
+    }
+
+    if (!apiKey) {
+        return res.status(400).json({ error: `API Key for ${provider} is not configured` });
+    }
+
+    try {
+        let modelsList = [];
+        if (provider === "Gemini") {
+            const fetchUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+            const response = await fetch(fetchUrl);
+            if (!response.ok) {
+                throw new Error(`Gemini API returned status ${response.status}`);
+            }
+            const data = await response.json();
+            if (data.models && Array.isArray(data.models)) {
+                modelsList = data.models
+                    .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+                    .map(m => m.name.replace(/^models\//, ''));
+            }
+        } else if (provider === "OpenAI") {
+            const response = await fetch("https://api.openai.com/v1/models", {
+                headers: {
+                    "Authorization": `Bearer ${apiKey}`
+                }
+            });
+            if (!response.ok) {
+                throw new Error(`OpenAI API returned status ${response.status}`);
+            }
+            const data = await response.json();
+            if (data.data && Array.isArray(data.data)) {
+                modelsList = data.data
+                    .map(m => m.id)
+                    .filter(id => id.startsWith('gpt') || id.startsWith('o1') || id.startsWith('o3'));
+            }
+        } else if (provider === "Claude") {
+            const response = await fetch("https://api.anthropic.com/v1/models", {
+                headers: {
+                    "x-api-key": apiKey,
+                    "anthropic-version": "2023-06-01"
+                }
+            });
+            if (!response.ok) {
+                throw new Error(`Anthropic API returned status ${response.status}`);
+            }
+            const data = await response.json();
+            if (data.data && Array.isArray(data.data)) {
+                modelsList = data.data.map(m => m.id);
+            }
+        }
+
+        // Fallbacks if list is empty
+        if (modelsList.length === 0) {
+            if (provider === "Gemini") {
+                modelsList = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+            } else if (provider === "OpenAI") {
+                modelsList = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"];
+            } else if (provider === "Claude") {
+                modelsList = ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"];
+            }
+        }
+
+        res.json({ success: true, models: modelsList });
+    } catch (err) {
+        console.error(`Error fetching models for ${provider}:`, err.message);
+        
+        // Return fallback lists on error
+        let modelsList = [];
+        if (provider === "Gemini") {
+            modelsList = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+        } else if (provider === "OpenAI") {
+            modelsList = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"];
+        } else if (provider === "Claude") {
+            modelsList = ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"];
+        }
+        res.json({ success: false, message: err.message, models: modelsList });
+    }
+});
+
 app.get('/api/settings/prompt', async (req, res) => {
     const settings = await getSettings();
     res.json({ prompt: settings.custom_prompt || PROMPT_ANALYSIS });

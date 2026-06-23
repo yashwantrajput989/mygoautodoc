@@ -25,6 +25,7 @@ import {
   X,
   Table,
   DollarSign,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -103,21 +104,69 @@ function AIPreferences() {
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
 
+  const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({
+    openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+    anthropic: ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
+    gemini: ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+  });
+  const [isLoadingModels, setIsLoadingModels] = useState<Record<string, boolean>>({});
+
+  const fetchAvailableModels = async (provider: string, apiKeyOverride?: string) => {
+    const keyName = provider === "Claude" ? "anthropic" : provider.toLowerCase();
+    const apiKey = apiKeyOverride || keys[keyName as keyof typeof keys];
+    if (!apiKey) return;
+
+    setIsLoadingModels(prev => ({ ...prev, [keyName]: true }));
+    try {
+      const res = await fetch(`${API_BASE}/settings/ai/models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          api_key: apiKey
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.models && Array.isArray(data.models)) {
+          setAvailableModels(prev => ({ ...prev, [keyName]: data.models }));
+          setModels(prev => {
+            const currentModel = prev[keyName as keyof typeof prev];
+            if (data.models.length > 0 && !data.models.includes(currentModel)) {
+              return { ...prev, [keyName]: data.models[0] };
+            }
+            return prev;
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch available models", err);
+    } finally {
+      setIsLoadingModels(prev => ({ ...prev, [keyName]: false }));
+    }
+  };
+
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
       .then((res) => res.json())
       .then((data) => {
         if (data.active_provider) setActiveProvider(data.active_provider);
-        setKeys({
+        const loadedKeys = {
           openai: data.openai_api_key || "",
           anthropic: data.anthropic_api_key || "",
           gemini: data.gemini_api_key || "",
-        });
+        };
+        setKeys(loadedKeys);
         setModels({
           openai: data.openai_model || "gpt-4o",
           anthropic: data.anthropic_model || "claude-3-5-sonnet-latest",
           gemini: data.gemini_model || "gemini-3.5-flash",
         });
+
+        // Trigger dynamic model fetches if keys are configured
+        if (loadedKeys.openai) fetchAvailableModels("OpenAI", loadedKeys.openai);
+        if (loadedKeys.anthropic) fetchAvailableModels("Claude", loadedKeys.anthropic);
+        if (loadedKeys.gemini) fetchAvailableModels("Gemini", loadedKeys.gemini);
       })
       .catch(() => {
         toast.error("Failed to load settings data");
@@ -140,6 +189,8 @@ function AIPreferences() {
       if (res.ok) {
         toast.success(`${provider} preferences saved successfully`);
         setActiveProvider(provider);
+        // Refresh models dynamically
+        fetchAvailableModels(provider, keys[stateKey as keyof typeof keys]);
       }
     } catch (err) {
       toast.error("Failed to save settings");
@@ -268,32 +319,20 @@ function AIPreferences() {
                         onChange={(e) => setModels({ ...models, [p.keyName]: e.target.value })}
                         className="bg-background border border-border h-9 px-3 rounded-md text-xs focus:ring-1 focus:ring-primary outline-none transition-all w-64 text-foreground font-medium"
                       >
-                        {p.id === "OpenAI" && (
-                          <>
-                            <option value="gpt-4o">gpt-4o (Recommended)</option>
-                            <option value="gpt-4o-mini">gpt-4o-mini</option>
-                            <option value="gpt-4-turbo">gpt-4-turbo</option>
-                            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
-                          </>
-                        )}
-                        {p.id === "Claude" && (
-                          <>
-                            <option value="claude-3-5-sonnet-latest">claude-3-5-sonnet-latest (Recommended)</option>
-                            <option value="claude-3-5-haiku-latest">claude-3-5-haiku-latest</option>
-                            <option value="claude-3-opus-latest">claude-3-opus-latest</option>
-                          </>
-                        )}
-                        {p.id === "Gemini" && (
-                          <>
-                            <option value="gemini-3.5-flash">gemini-3.5-flash (Recommended)</option>
-                            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-                            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-                          </>
-                        )}
+                        {(availableModels[p.keyName] || []).map((m) => (
+                          <option key={m} value={m}>
+                            {m} {m.includes("recommended") || m.includes("latest") || m === "gpt-4o" || m === "gemini-3.5-flash" || m === "claude-3-5-sonnet-latest" ? "(Recommended)" : ""}
+                          </option>
+                        ))}
                       </select>
+                      <button
+                        onClick={() => fetchAvailableModels(p.id)}
+                        disabled={isLoadingModels[p.keyName] || isSaving}
+                        className="p-2 border border-border bg-card hover:bg-muted text-muted-foreground hover:text-foreground rounded-md transition-all active:scale-[0.95] flex items-center justify-center h-9"
+                        title="Fetch latest available models for this key"
+                      >
+                        <RefreshCw className={cn("h-4 w-4", isLoadingModels[p.keyName] && "animate-spin")} />
+                      </button>
                       <button
                         onClick={() => handleSave(p.id)}
                         disabled={isSaving}
