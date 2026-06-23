@@ -20,6 +20,7 @@ import {
   Code,
   Copy,
   RefreshCw,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
