@@ -3880,25 +3880,22 @@ async function runPhase2() {
             console.log(`⏳ [Server] Waiting 15s for ${fname}...`);
             await sleep(15000);
 
-            let attempts = 0;
-            const maxAttempts = 5;
+            try {
+                if (!await storageService.existsFile('downloads', fname)) continue;
+                const fileData = await storageService.readFile('downloads', fname);
 
-            while (attempts < maxAttempts) {
+                if (!fileData.length && !fname.startsWith('body_')) continue;
+
+                let isBodyOnly = false;
+                let emailMeta = {};
+                if (await storageService.existsFile('metadata', metaFilename)) {
+                    try {
+                        emailMeta = await storageService.readFile('metadata', metaFilename, true);
+                        isBodyOnly = emailMeta.is_body_only === true || fname.startsWith('body_');
+                    } catch { /* skip */ }
+                }
+
                 try {
-                    if (!await storageService.existsFile('downloads', fname)) break;
-                    const fileData = await storageService.readFile('downloads', fname);
-
-                    if (!fileData.length && !fname.startsWith('body_')) break;
-
-                    let isBodyOnly = false;
-                    let emailMeta = {};
-                    if (await storageService.existsFile('metadata', metaFilename)) {
-                        try {
-                            emailMeta = await storageService.readFile('metadata', metaFilename, true);
-                            isBodyOnly = emailMeta.is_body_only === true || fname.startsWith('body_');
-                        } catch { /* skip */ }
-                    }
-
                     let response;
                     if (isBodyOnly) {
                         console.log(`🧠 [AI] Parsing body-only email contents using Gemini...`);
@@ -4051,47 +4048,37 @@ async function runPhase2() {
                     }
 
                     processedCount++;
-                    break;
 
                 } catch (e) {
                     const errMsg = e.message || '';
-                    if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-                        attempts++;
-                        console.log(`⚠️ Rate limit hit. Waiting 60s (Attempt ${attempts}/${maxAttempts})...`);
-                        await sleep(60000);
-                    } else {
-                        attempts++;
-                        console.error(`❌ Error analyzing ${fname}:`, errMsg);
-                        await sleep(5000);
-                        if (attempts >= maxAttempts) {
-                            console.log(`❌ AI parsing failed completely for ${fname} after ${attempts} attempts. Saving as failed_parsing.`);
-                            const failedData = {
-                                human_readable_id: getHumanReadableId(baseName),
-                                is_legit_invoice: false,
-                                status: 'failed_parsing',
-                                error: errMsg,
-                                header: {
-                                    context: emailMeta?.expected_doc_type || 'Unknown',
-                                    supplier_name: 'AI Parsing Failed'
-                                },
-                                totals: {
-                                    total_amount: 'Error',
-                                    currency: ''
-                                },
-                                email_metadata: emailMeta,
-                                is_body_only: isBodyOnly,
-                                exceptions: `AI Analysis Error: ${errMsg}`
-                            };
-                            await storageService.moveFile('downloads', 'sap_docs', fname);
-                            await storageService.saveFile('sap_json', baseName + '.json', failedData, true);
+                    console.error(`❌ Error analyzing ${fname}:`, errMsg);
+                    console.log(`❌ AI parsing failed for ${fname}. Saving as failed_parsing.`);
+                    const failedData = {
+                        human_readable_id: getHumanReadableId(baseName),
+                        is_legit_invoice: false,
+                        status: 'failed_parsing',
+                        error: errMsg,
+                        header: {
+                            context: emailMeta?.expected_doc_type || 'Unknown',
+                            supplier_name: 'AI Parsing Failed'
+                        },
+                        totals: {
+                            total_amount: 'Error',
+                            currency: ''
+                        },
+                        email_metadata: emailMeta,
+                        is_body_only: isBodyOnly,
+                        exceptions: `AI Analysis Error: ${errMsg}`
+                    };
+                    await storageService.moveFile('downloads', 'sap_docs', fname);
+                    await storageService.saveFile('sap_json', baseName + '.json', failedData, true);
 
-                            if (await storageService.existsFile('metadata', metaFilename)) {
-                                await storageService.deleteFile('metadata', metaFilename);
-                            }
-                            break;
-                        }
+                    if (await storageService.existsFile('metadata', metaFilename)) {
+                        await storageService.deleteFile('metadata', metaFilename);
                     }
                 }
+            } catch (e) {
+                console.error(`Fatal error for ${fname}:`, e.message);
             }
         } catch (e) {
             console.error(`Fatal error for ${fname}:`, e.message);
