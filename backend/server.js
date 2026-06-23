@@ -733,6 +733,15 @@ async function uploadAttachmentToSAP(docId, sapDocNumber, docContext, isBtp, aut
 
 async function enrichDocumentWithApis(docData) {
     const settings = await getSettings();
+    
+    // Backup original AI extracted data for side-by-side UI comparison
+    if (!docData.ai_extracted_data) {
+        docData.ai_extracted_data = {
+            header: { ...(docData.header || {}) },
+            line_items: JSON.parse(JSON.stringify(docData.line_items || []))
+        };
+    }
+
     docData = resolvePricingForDocument(docData, settings);
     const apiConfigs = settings.api_configs || [];
     
@@ -741,10 +750,10 @@ async function enrichDocumentWithApis(docData) {
     }
     
     const isSalesOrder = docData.header?.context === "Sales Order";
-    const custName = docData.header?.customer_name || '';
     const emailMeta = docData.email_metadata || {};
     const recipientEmail = emailMeta.recipient_email || '';
     const matchingEmailConf = recipientEmail ? (settings.emails || []).find(e => e.email?.toLowerCase() === recipientEmail.toLowerCase()) : null;
+    const custName = matchingEmailConf?.customer_name || docData.header?.customer_name || '';
     
     // Track base metadata origins
     if (emailMeta.customer_name) {
@@ -872,7 +881,7 @@ async function enrichDocumentWithApis(docData) {
     if (bpConfig && custName) {
         try {
             console.log(`📡 [API Enrichment] Querying Business Partner API for "${custName}"...`);
-            let query = `BusinessPartners?$filter=contains(BusinessPartnerName,'${encodeURIComponent(custName)}')&$expand=to_BusinessPartnerAddress,to_Customer`;
+            let query = `BusinessPartners?$filter=contains(BusinessPartnerName,'${encodeURIComponent(custName)}') or BusinessPartner eq '${encodeURIComponent(custName)}'&$expand=to_BusinessPartnerAddress,to_Customer`;
             let bpResult;
             try {
                 bpResult = await executeODataRequest(bpConfig, query);
@@ -886,7 +895,8 @@ async function enrichDocumentWithApis(docData) {
             
             let matchedRecord = records.find(r => 
                 String(r.BusinessPartnerName || r.OrganizationBPName1 || '').toLowerCase().includes(custName.toLowerCase()) ||
-                custName.toLowerCase().includes(String(r.BusinessPartnerName || r.OrganizationBPName1 || '').toLowerCase())
+                custName.toLowerCase().includes(String(r.BusinessPartnerName || r.OrganizationBPName1 || '').toLowerCase()) ||
+                String(r.BusinessPartner || '').toLowerCase() === custName.toLowerCase()
             );
             
             if (!matchedRecord && records.length > 0) {
@@ -896,6 +906,15 @@ async function enrichDocumentWithApis(docData) {
             if (matchedRecord) {
                 console.log(`✅ [API Enrichment] Found Business Partner match: ${matchedRecord.BusinessPartnerName || matchedRecord.BusinessPartner}`);
                 
+                // Overwrite customer name in header with resolved name from SAP
+                if (matchedRecord.BusinessPartnerName || matchedRecord.OrganizationBPName1) {
+                    docData.header.customer_name = matchedRecord.BusinessPartnerName || matchedRecord.OrganizationBPName1;
+                    docData.field_origins.customer_name = {
+                        value: docData.header.customer_name,
+                        source: `Business Partner API (${bpConfig.name}) - Resolved Name`
+                    };
+                }
+
                 let customerId = matchedRecord.BusinessPartner;
                 if (matchedRecord.to_Customer) {
                     const custData = matchedRecord.to_Customer.results?.[0] || matchedRecord.to_Customer;
@@ -1004,6 +1023,55 @@ async function enrichDocumentWithApis(docData) {
     
     return docData;
 }
+
+app.get('/api/sap/business-partner', async (req, res) => {
+    try {
+        const { query: custName } = req.query;
+        if (!custName) {
+            return res.status(400).json({ error: "Query parameter 'query' is required" });
+        }
+
+        const settings = await getSettings();
+        const apiConfigs = settings.api_configs || [];
+        const bpConfig = apiConfigs.find(c => c.status === 'Active' && c.context === 'BusinessPartner');
+        
+        if (!bpConfig) {
+            return res.status(404).json({ error: "Active BusinessPartner API config not found" });
+        }
+
+        console.log(`📡 [API Lookup Route] Querying Business Partner API for "${custName}"...`);
+        let query = `BusinessPartners?$filter=contains(BusinessPartnerName,'${encodeURIComponent(custName)}') or BusinessPartner eq '${encodeURIComponent(custName)}'&$expand=to_BusinessPartnerAddress,to_Customer`;
+        let bpResult;
+        try {
+            bpResult = await executeODataRequest(bpConfig, query);
+        } catch (err) {
+            console.warn(`OData contains filter failed for BP lookup route, trying direct fetch to filter locally: ${err.message}`);
+            bpResult = await executeODataRequest(bpConfig, `BusinessPartners?$expand=to_BusinessPartnerAddress,to_Customer&$top=100`);
+        }
+        
+        let records = bpResult?.value || bpResult?.d?.results || bpResult || [];
+        if (!Array.isArray(records) && records.results) records = records.results;
+        
+        let matchedRecord = records.find(r => 
+            String(r.BusinessPartnerName || r.OrganizationBPName1 || '').toLowerCase().includes(custName.toLowerCase()) ||
+            custName.toLowerCase().includes(String(r.BusinessPartnerName || r.OrganizationBPName1 || '').toLowerCase()) ||
+            String(r.BusinessPartner || '').toLowerCase() === custName.toLowerCase()
+        );
+        
+        if (!matchedRecord && records.length > 0) {
+            matchedRecord = records[0];
+        }
+
+        if (matchedRecord) {
+            res.json(matchedRecord);
+        } else {
+            res.status(404).json({ error: `No business partner matches found for "${custName}"` });
+        }
+    } catch (err) {
+        console.error("❌ [API] Business Partner fetch error:", err.message);
+        res.status(500).json({ error: "Failed to query SAP Business Partner API", details: err.message });
+    }
+});
 
 // ─── SETTINGS ROUTES ─────────────────────────────────────────────
 

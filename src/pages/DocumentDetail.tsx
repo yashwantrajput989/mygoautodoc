@@ -40,6 +40,7 @@ export default function DocumentDetail() {
   const [isPdfViewCollapsed, setIsPdfViewCollapsed] = useState(false);
   const [isAttachmentsCollapsed, setIsAttachmentsCollapsed] = useState(false);
   const [isExtractedDataCollapsed, setIsExtractedDataCollapsed] = useState(false);
+  const [isMatrixCollapsed, setIsMatrixCollapsed] = useState(false);
   const [sapPayload, setSapPayload] = useState<any>(null);
   const [isPayloadCollapsed, setIsPayloadCollapsed] = useState(true);
   const [isFetchingPayload, setIsFetchingPayload] = useState(false);
@@ -1008,6 +1009,149 @@ export default function DocumentDetail() {
                   </>
                 )}
               </div>
+
+              {/* Master Data Reconciliation Matrix Card */}
+              {currentDoc?.data && (
+                <div className="fiori-card flex flex-col overflow-visible shadow-sm border border-emerald-500/25 bg-card/60 backdrop-blur-sm mt-6 animate-in fade-in duration-300">
+                  <button
+                    onClick={() => setIsMatrixCollapsed(!isMatrixCollapsed)}
+                    className="w-full p-4 flex items-center justify-between hover:bg-muted/30 transition-colors text-left border-b border-border bg-emerald-500/5 focus:outline-none rounded-t-2xl"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Zap className="h-4.5 w-4.5 text-emerald-500" />
+                      <div>
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-900 font-black">
+                          Master Data Reconciliation Matrix
+                        </h3>
+                        <p className="text-[9px] text-muted-foreground mt-0.5 font-medium">
+                          Side-by-side alignment of AI extractions, SAP master lookup APIs, and final payload staging
+                        </p>
+                      </div>
+                    </div>
+                    {isMatrixCollapsed ? (
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </button>
+
+                  {!isMatrixCollapsed && (
+                    <div className="p-5 space-y-6">
+                      <div className="overflow-x-auto border border-border/80 rounded-xl bg-card">
+                        <table className="w-full text-left border-collapse text-xs whitespace-nowrap min-w-[600px]">
+                          <thead>
+                            <tr className="bg-muted/50 border-b border-border">
+                              <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-1/4">Data Property</th>
+                              <th className="p-3 text-[10px] font-bold text-red-500 uppercase tracking-wider w-1/4 bg-red-500/5">1. AI Extracted (Raw Document)</th>
+                              <th className="p-3 text-[10px] font-bold text-indigo-600 uppercase tracking-wider w-1/4 bg-indigo-500/5">2. SAP Master Data (API Match)</th>
+                              <th className="p-3 text-[10px] font-bold text-emerald-600 uppercase tracking-wider w-1/4 bg-emerald-500/5">3. Final SAP Push (Staging)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {/* Sold-to Party Row */}
+                            <tr className="hover:bg-muted/10 transition-colors">
+                              <td className="p-3 font-semibold text-foreground">
+                                {isSalesOrder ? "Sold-To Party (Customer)" : "Supplier (Vendor)"}
+                              </td>
+                              <td className="p-3 bg-red-500/5 font-medium text-red-700">
+                                {(() => {
+                                  const name = currentDoc.data.ai_extracted_data?.header?.customer_name || currentDoc.data.ai_extracted_data?.header?.supplier_name;
+                                  const code = currentDoc.data.ai_extracted_data?.header?.sold_to_party_number || currentDoc.data.ai_extracted_data?.header?.supplier_number;
+                                  return [name, code].filter(Boolean).join(" / ") || "—";
+                                })()}
+                              </td>
+                              <td className="p-3 bg-indigo-500/5 font-semibold text-indigo-700">
+                                {(() => {
+                                  const bpNameSource = currentDoc.data.field_origins?.customer_name?.source || "";
+                                  const isNameResolvedViaBP = bpNameSource.toLowerCase().includes("business partner api");
+                                  if (!isNameResolvedViaBP) return <span className="text-muted-foreground font-normal italic">No SAP Master Record match</span>;
+                                  return `${currentDoc.data.header?.customer_name || currentDoc.data.header?.supplier_name} (${currentDoc.data.header?.sold_to_party_number || currentDoc.data.header?.supplier_number})`;
+                                })()}
+                              </td>
+                              <td className="p-3 bg-emerald-500/5 font-bold text-emerald-700">
+                                {isSalesOrder 
+                                  ? `${currentDoc.data.header?.customer_name || "—"} (${currentDoc.data.header?.sold_to_party_number || "—"})`
+                                  : `${currentDoc.data.header?.supplier_name || "—"} (${currentDoc.data.header?.supplier_number || "—"})`
+                                }
+                              </td>
+                            </tr>
+
+                            {/* Billing/Shipping Address Row */}
+                            <tr className="hover:bg-muted/10 transition-colors">
+                              <td className="p-3 font-semibold text-foreground">Billing / Sold-to Address</td>
+                              <td className="p-3 bg-red-500/5 text-red-600 truncate max-w-[200px]" title={currentDoc.data.ai_extracted_data?.header?.customer_address || currentDoc.data.ai_extracted_data?.header?.sold_to_address}>
+                                {currentDoc.data.ai_extracted_data?.header?.customer_address || currentDoc.data.ai_extracted_data?.header?.sold_to_address || "—"}
+                              </td>
+                              <td className="p-3 bg-indigo-500/5 text-indigo-600 font-semibold truncate max-w-[200px]" title={currentDoc.data.header?.customer_address || currentDoc.data.header?.sold_to_address}>
+                                {(() => {
+                                  const bpAddressSource = currentDoc.data.field_origins?.customer_address?.source || currentDoc.data.field_origins?.sold_to_address?.source || "";
+                                  const isAddressResolvedViaBP = bpAddressSource.toLowerCase().includes("business partner api");
+                                  if (!isAddressResolvedViaBP) return <span className="text-muted-foreground font-normal italic">No SAP Address match</span>;
+                                  return currentDoc.data.header?.customer_address || currentDoc.data.header?.sold_to_address;
+                                })()}
+                              </td>
+                              <td className="p-3 bg-emerald-500/5 text-emerald-700 font-bold truncate max-w-[200px]" title={currentDoc.data.header?.customer_address || currentDoc.data.header?.sold_to_address}>
+                                {currentDoc.data.header?.customer_address || currentDoc.data.header?.sold_to_address || "—"}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Material SKU Comparisons (Line Items) */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                          <span>Line Item Material (SKU) Reconciliation Matrix</span>
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-500 text-[9px] font-black tracking-tight font-mono ml-1">
+                            CMIR Match
+                          </span>
+                        </div>
+
+                        <div className="overflow-x-auto border border-border/80 rounded-xl bg-card">
+                          <table className="w-full text-left border-collapse text-xs whitespace-nowrap min-w-[700px]">
+                            <thead>
+                              <tr className="bg-muted/30 border-b border-border">
+                                <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Item</th>
+                                <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Description</th>
+                                <th className="p-3 text-[10px] font-bold text-red-500 uppercase tracking-wider bg-red-500/5">AI Customer/Supplier SKU</th>
+                                <th className="p-3 text-[10px] font-bold text-indigo-600 uppercase tracking-wider bg-indigo-500/5">CMIR Lookup API Match</th>
+                                <th className="p-3 text-[10px] font-bold text-emerald-600 uppercase tracking-wider bg-emerald-500/5">Final SAP Push SKU</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {currentDoc.data.line_items?.map((item: any, idx: number) => {
+                                const aiItem = currentDoc.data.ai_extracted_data?.line_items?.[idx];
+                                const hasCmirMatch = !!currentDoc.data.line_item_origins?.[idx];
+                                return (
+                                  <tr key={idx} className="hover:bg-muted/10 transition-colors">
+                                    <td className="p-3 font-bold text-muted-foreground">{item.item_number || (idx + 1)}</td>
+                                    <td className="p-3 font-semibold text-foreground truncate max-w-[200px]" title={item.material_description}>
+                                      {item.material_description}
+                                    </td>
+                                    <td className="p-3 bg-red-500/5 font-mono text-[11px] text-red-700">
+                                      {aiItem ? (aiItem.customer_material_number || aiItem.supplier_material_number || "—") : "—"}
+                                    </td>
+                                    <td className="p-3 bg-indigo-500/5 font-mono text-[11px] text-indigo-700 font-bold">
+                                      {hasCmirMatch ? (
+                                        item.sap_material_number
+                                      ) : (
+                                        <span className="text-muted-foreground font-normal italic">No CMIR API SKU match</span>
+                                      )}
+                                    </td>
+                                    <td className="p-3 bg-emerald-500/5 font-mono text-[11px] text-emerald-700 font-black">
+                                      {item.sap_material_number || "—"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Data Ingestion & API Provenance Trace Card */}
               {currentDoc?.data?.field_origins && Object.keys(currentDoc.data.field_origins).length > 0 && (

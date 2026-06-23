@@ -415,20 +415,6 @@ function ManageSources() {
 
   const handleEmailChange = (val: string) => {
     setNewEmail(val);
-    if (val.includes('@')) {
-      const parts = val.split('@');
-      const domainPart = parts[1]?.trim().toLowerCase();
-      if (domainPart) {
-        setNewDomain(domainPart);
-        // Find existing email configuration with the same domain to inherit
-        const match = emails.find(e => e.domain && e.domain.toLowerCase() === domainPart);
-        if (match) {
-          setNewCustomerName(match.customer_name || "");
-          setNewCustomerAddress(match.customer_address || "");
-          toast.info(`Inherited settings for domain "${domainPart}"`, { id: "inherit-domain" });
-        }
-      }
-    }
   };
 
   useEffect(() => {
@@ -462,11 +448,7 @@ function ManageSources() {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('outlook') === 'success' && data.outlook_tokens) {
           const pendingType = sessionStorage.getItem('pending_outlook_doctype') || 'Vendor Invoice';
-          const pendingDomain = sessionStorage.getItem('pending_outlook_domain') || '';
           const pendingCustomerName = sessionStorage.getItem('pending_outlook_customer_name') || '';
-          const pendingCustomerAddress = sessionStorage.getItem('pending_outlook_customer_address') || '';
-          const pendingSalesOrg = sessionStorage.getItem('pending_outlook_sales_org') || '';
-          const pendingDistrChan = sessionStorage.getItem('pending_outlook_distr_chan') || '';
           
           const newOutlookEmail = {
             id: Date.now(),
@@ -474,11 +456,11 @@ function ManageSources() {
             provider: 'Outlook',
             outlook_tokens: data.outlook_tokens,
             expected_doc_type: pendingType,
-            domain: pendingDomain,
-            customer_name: pendingType === "Vendor Invoice" ? pendingCustomerName : "",
-            customer_address: pendingType === "Vendor Invoice" ? pendingCustomerAddress : "",
-            sales_org: pendingType === "Sales Order" ? pendingSalesOrg : "",
-            distr_chan: pendingType === "Sales Order" ? pendingDistrChan : "",
+            domain: "",
+            customer_name: pendingCustomerName,
+            customer_address: "",
+            sales_org: "",
+            distr_chan: "",
             division: "",
             company_code: "",
             active: true
@@ -504,13 +486,7 @@ function ManageSources() {
 
           // Clear session storage and URL query
           sessionStorage.removeItem('pending_outlook_doctype');
-          sessionStorage.removeItem('pending_outlook_domain');
           sessionStorage.removeItem('pending_outlook_customer_name');
-          sessionStorage.removeItem('pending_outlook_customer_address');
-          sessionStorage.removeItem('pending_outlook_sales_org');
-          sessionStorage.removeItem('pending_outlook_distr_chan');
-          sessionStorage.removeItem('pending_outlook_division');
-          sessionStorage.removeItem('pending_outlook_company_code');
           window.history.replaceState({}, document.title, window.location.pathname);
         } else {
           setEmails(currentEmails);
@@ -590,11 +566,11 @@ function ManageSources() {
       password: newPassword,
       server: newServer.trim() || "imap.gmail.com",
       expected_doc_type: newDocType,
-      domain: newDomain.trim(),
-      customer_name: newDocType === "Vendor Invoice" ? newCustomerName.trim() : "",
-      customer_address: newDocType === "Vendor Invoice" ? newCustomerAddress.trim() : "",
-      sales_org: newDocType === "Sales Order" ? newSalesOrg.trim() : "",
-      distr_chan: newDocType === "Sales Order" ? newDistrChan.trim() : "",
+      domain: "",
+      customer_name: newCustomerName.trim(),
+      customer_address: "",
+      sales_org: "",
+      distr_chan: "",
       division: "",
       company_code: "",
       active: true,
@@ -608,13 +584,7 @@ function ManageSources() {
   const handleAddEmailOutlook = () => {
     // Save choices to session storage so we retrieve them on success callback redirect
     sessionStorage.setItem('pending_outlook_doctype', newDocType);
-    sessionStorage.setItem('pending_outlook_domain', newDomain);
-    sessionStorage.setItem('pending_outlook_customer_name', newDocType === "Vendor Invoice" ? newCustomerName : "");
-    sessionStorage.setItem('pending_outlook_customer_address', newDocType === "Vendor Invoice" ? newCustomerAddress : "");
-    sessionStorage.setItem('pending_outlook_sales_org', newDocType === "Sales Order" ? newSalesOrg : "");
-    sessionStorage.setItem('pending_outlook_distr_chan', newDocType === "Sales Order" ? newDistrChan : "");
-    sessionStorage.setItem('pending_outlook_division', "");
-    sessionStorage.setItem('pending_outlook_company_code', "");
+    sessionStorage.setItem('pending_outlook_customer_name', newCustomerName);
     
     toast.info("Redirecting to Microsoft secure sign-in portal...");
     window.location.href = `${API_BASE}/auth/outlook/login?redirect=true`;
@@ -932,9 +902,7 @@ function ManageSources() {
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Provider</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Domain</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-36">Customer Name</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-40">Customer Address</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Customer Name</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Status</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-20">Actions</th>
                   </tr>
@@ -969,29 +937,11 @@ function ManageSources() {
                       </td>
                       <td className="p-4">
                         <input
-                          value={eConf.domain || ""}
-                          onChange={(e) => handleFieldChange(eConf.id, "domain", e.target.value)}
-                          onBlur={handleBlurSave}
-                          placeholder="—"
-                          className="w-24 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary font-mono text-center text-xs shadow-inner"
-                        />
-                      </td>
-                      <td className="p-4">
-                        <input
                           value={eConf.customer_name || ""}
                           onChange={(e) => handleFieldChange(eConf.id, "customer_name", e.target.value)}
                           onBlur={handleBlurSave}
-                          placeholder="—"
-                          className="w-32 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner"
-                        />
-                      </td>
-                      <td className="p-4">
-                        <input
-                          value={eConf.customer_address || ""}
-                          onChange={(e) => handleFieldChange(eConf.id, "customer_address", e.target.value)}
-                          onBlur={handleBlurSave}
-                          placeholder="—"
-                          className="w-36 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner"
+                          placeholder="e.g. BP-CUST or C00003"
+                          className="w-full h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-xs shadow-inner font-bold"
                         />
                       </td>
                       <td className="p-4">
@@ -1042,7 +992,7 @@ function ManageSources() {
         </div>
 
         {/* Sales Order Integration Channels */}
-        <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40 backdrop-blur-sm shadow-lg">
+        <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40 backdrop-blur-sm shadow-lg mb-6">
           <div className="p-4 border-b border-border bg-muted/20 flex items-center justify-between">
             <span className="text-xs font-bold text-foreground">Sales Order Integration Channels</span>
             <span className="text-[10px] text-muted-foreground font-semibold">
@@ -1058,9 +1008,7 @@ function ManageSources() {
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Provider</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-28">Domain</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-36">Sales Organization</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-40">Distribution Channel</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Customer Name</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Status</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-20">Actions</th>
                   </tr>
@@ -1095,29 +1043,11 @@ function ManageSources() {
                       </td>
                       <td className="p-4">
                         <input
-                          value={eConf.domain || ""}
-                          onChange={(e) => handleFieldChange(eConf.id, "domain", e.target.value)}
+                          value={eConf.customer_name || ""}
+                          onChange={(e) => handleFieldChange(eConf.id, "customer_name", e.target.value)}
                           onBlur={handleBlurSave}
-                          placeholder="—"
-                          className="w-24 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary font-mono text-center text-xs shadow-inner"
-                        />
-                      </td>
-                      <td className="p-4">
-                        <input
-                          value={eConf.sales_org || ""}
-                          onChange={(e) => handleFieldChange(eConf.id, "sales_org", e.target.value)}
-                          onBlur={handleBlurSave}
-                          placeholder="1010"
-                          className="w-32 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner font-mono font-bold"
-                        />
-                      </td>
-                      <td className="p-4">
-                        <input
-                          value={eConf.distr_chan || ""}
-                          onChange={(e) => handleFieldChange(eConf.id, "distr_chan", e.target.value)}
-                          onBlur={handleBlurSave}
-                          placeholder="01"
-                          className="w-36 h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-center text-xs shadow-inner font-mono font-bold"
+                          placeholder="e.g. BP-CUST or C00003"
+                          className="w-full h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-xs shadow-inner font-bold"
                         />
                       </td>
                       <td className="p-4">
@@ -1165,6 +1095,139 @@ function ManageSources() {
               <p className="text-xs font-bold text-foreground">No active Sales Order integration channels</p>
             </div>
           )}
+        </div>
+
+        {/* SAP Business Partner Lookup Panel */}
+        <div className="border border-border/80 rounded-2xl overflow-hidden bg-indigo-500/5 backdrop-blur-sm shadow-lg p-6 border-indigo-500/15">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-500">
+              <Database className="h-6 w-6" />
+            </div>
+            <div>
+              <h3 className="font-bold text-foreground text-sm">SAP Business Partner Registry Lookup</h3>
+              <p className="text-[10px] text-muted-foreground">Query live SAP S/4HANA Business Partner API details directly from settings</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <p className="text-xs text-muted-foreground max-w-2xl leading-relaxed">
+              Verify customer mapping data by querying the active SAP Business Partner OData service. Select from one of the active customer codes or type any custom customer name/number query to verify the SAP API response details.
+            </p>
+
+            <div className="flex items-center gap-3 max-w-xl">
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  value={lookupQuery}
+                  onChange={(e) => setLookupQuery(e.target.value)}
+                  placeholder="e.g. C00003 or Apothekare"
+                  className="w-full h-10 px-3.5 pr-20 rounded-xl border border-border bg-background text-xs outline-none focus:ring-1 focus:ring-primary font-bold shadow-inner"
+                  list="configured-bp-suggestions"
+                />
+                <datalist id="configured-bp-suggestions">
+                  {Array.from(new Set(emails.map(e => e.customer_name).filter(Boolean))).map((custName) => (
+                    <option key={custName} value={custName} />
+                  ))}
+                </datalist>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1.5">
+                  {emails.map(e => e.customer_name).filter(Boolean).length > 0 && (
+                    <select
+                      onChange={(e) => setLookupQuery(e.target.value)}
+                      className="bg-transparent border-none text-[10px] font-bold text-indigo-600 outline-none cursor-pointer max-w-[80px]"
+                      defaultValue=""
+                    >
+                      <option value="" disabled>Saved</option>
+                      {Array.from(new Set(emails.map(e => e.customer_name).filter(Boolean))).map((custName) => (
+                        <option key={custName} value={custName}>{custName}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={handleFetchBP}
+                disabled={isFetchingBP}
+                className="px-5 h-10 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {isFetchingBP ? (
+                  <>
+                    <Activity className="h-4.5 w-4.5 animate-spin" />
+                    Fetching...
+                  </>
+                ) : (
+                  <>
+                    <Globe className="h-4 w-4" />
+                    Fetch SAP Record
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Lookup Results pane */}
+            {isFetchingBP && (
+              <div className="p-6 border border-border rounded-2xl bg-card/50 space-y-3 animate-pulse">
+                <div className="h-4 bg-muted rounded w-1/4" />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="h-8 bg-muted rounded" />
+                  <div className="h-8 bg-muted rounded" />
+                  <div className="h-8 bg-muted rounded col-span-2" />
+                </div>
+              </div>
+            )}
+
+            {lookupError && (
+              <div className="p-4 rounded-xl border border-red-500/20 bg-red-500/5 text-xs text-red-400 font-bold max-w-xl flex items-center gap-2 animate-in fade-in duration-300">
+                <div className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                {lookupError}
+              </div>
+            )}
+
+            {lookupResult && (
+              <div className="p-5 border border-indigo-500/20 bg-card rounded-2xl space-y-4 shadow-md max-w-2xl animate-in slide-in-from-top-2 duration-300">
+                <div className="flex items-center justify-between border-b border-border pb-3">
+                  <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider font-bold">SAP BP OData Response Record</span>
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-500/10 text-indigo-500 border border-indigo-500/20">
+                    Live Match
+                  </span>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="p-3 bg-muted/30 border rounded-xl">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">Business Partner ID</span>
+                    <span className="font-mono font-bold text-foreground">{lookupResult.BusinessPartner}</span>
+                  </div>
+
+                  <div className="p-3 bg-muted/30 border rounded-xl">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">Business Partner Name</span>
+                    <span className="font-bold text-foreground">{lookupResult.BusinessPartnerName || lookupResult.OrganizationBPName1 || "—"}</span>
+                  </div>
+
+                  <div className="p-3 bg-muted/30 border rounded-xl md:col-span-2">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">SAP Customer ID (Expanded to_Customer)</span>
+                    <span className="font-mono font-bold text-foreground">
+                      {lookupResult.to_Customer?.Customer || lookupResult.to_Customer?.results?.[0]?.Customer || "N/A"}
+                    </span>
+                  </div>
+
+                  <div className="p-3 bg-muted/30 border rounded-xl md:col-span-2">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">Billing / Sold-to Address</span>
+                    <span className="font-bold text-foreground leading-relaxed">
+                      {(() => {
+                        const addrList = lookupResult.to_BusinessPartnerAddress?.results || lookupResult.to_BusinessPartnerAddress || [];
+                        const addr = Array.isArray(addrList) ? addrList[0] : addrList;
+                        if (!addr) return "No Address Record associated in SAP";
+                        const street = addr.StreetName || addr.Street || '';
+                        const city = addr.CityName || addr.City || '';
+                        const postal = addr.PostalCode || '';
+                        const country = addr.Country || '';
+                        return [street, city, postal, country].filter(Boolean).join(', ') || "No Address Record associated in SAP";
+                      })()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
