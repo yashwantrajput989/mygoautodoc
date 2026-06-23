@@ -413,6 +413,37 @@ function ManageSources() {
   const [isTestingEmail, setIsTestingEmail] = useState<Record<string, boolean>>({});
   const [emailStatus, setEmailStatus] = useState<Record<string, "Connected" | "Disconnected" | "Pending">>({});
 
+  // SAP Business Partner Registry Lookup State
+  const [lookupQuery, setLookupQuery] = useState("");
+  const [isFetchingBP, setIsFetchingBP] = useState(false);
+  const [lookupResult, setLookupResult] = useState<any>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+
+  const handleFetchBP = async () => {
+    if (!lookupQuery.trim()) {
+      toast.error("Please enter a customer code or name to search");
+      return;
+    }
+    setIsFetchingBP(true);
+    setLookupError(null);
+    setLookupResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/sap/business-partner?query=${encodeURIComponent(lookupQuery.trim())}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to fetch Business Partner");
+      }
+      setLookupResult(data);
+      toast.success("SAP Business Partner fetched successfully!");
+    } catch (err: any) {
+      console.error(err);
+      setLookupError(err.message || "An unexpected error occurred");
+      toast.error(err.message || "Failed to fetch Business Partner");
+    } finally {
+      setIsFetchingBP(false);
+    }
+  };
+
   const handleEmailChange = (val: string) => {
     setNewEmail(val);
   };
