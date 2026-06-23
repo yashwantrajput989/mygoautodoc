@@ -10,13 +10,14 @@
     "sync": "node app.js sync"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.621.0",
     "@azure/msal-node": "^2.16.2",
     "@google/genai": "^1.1.0",
-    "@aws-sdk/client-s3": "^3.621.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "imap": "^0.8.19",
-    "mailparser": "^3.7.2"
+    "mailparser": "^3.7.2",
+    "word-extractor": "^1.0.4"
   }
 }

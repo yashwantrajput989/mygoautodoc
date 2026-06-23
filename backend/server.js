@@ -15,6 +15,7 @@ import { GoogleGenAI } from '@google/genai';
 import * as msal from '@azure/msal-node';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
+import WordExtractor from 'word-extractor';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2087,6 +2088,23 @@ app.get('/api/documents/:id', async (req, res) => {
             docData = await enrichDocumentWithApis(docData);
         }
 
+        let extractedText = null;
+        if (['.docx', '.doc', '.txt'].includes(ext)) {
+            try {
+                const category = isPending ? 'downloads' : 'sap_docs';
+                const fileBuf = await storageService.readFile(category, `${id}${ext}`);
+                if (ext === '.txt') {
+                    extractedText = fileBuf.toString('utf-8');
+                } else if (ext === '.docx' || ext === '.doc') {
+                    const extractor = new WordExtractor();
+                    const doc = await extractor.extract(fileBuf);
+                    extractedText = doc.getBody();
+                }
+            } catch (err) {
+                console.error(`Failed to extract text for document detail ${id}:`, err.message);
+            }
+        }
+
         res.json({
             id: id,
             data: docData,
@@ -2094,7 +2112,8 @@ app.get('/api/documents/:id', async (req, res) => {
             is_legit: !isPending,
             is_pending: isPending,
             extension: ext,
-            filename: `${id}${ext}`
+            filename: `${id}${ext}`,
+            extracted_text: extractedText
         });
     } catch (err) {
         console.error(`Error fetching document details for ${req.params.id}:`, err.message);
@@ -4247,8 +4266,28 @@ async function runPhase2() {
                                 ],
                                 config: { responseMimeType: 'application/json' },
                             });
+                        } else if (ext === '.docx' || ext === '.doc') {
+                            let extractedText = '';
+                            try {
+                                const extractor = new WordExtractor();
+                                const doc = await extractor.extract(fileData);
+                                extractedText = doc.getBody();
+                                console.log(`🧠 [AI] Successfully extracted Word document text for ${fname} (${extractedText.length} chars)`);
+                            } catch (extractErr) {
+                                console.error(`⚠️ Failed to extract Word text for ${fname}:`, extractErr.message);
+                            }
+
+                            const fullContent = `Analyze this Word document content for SAP S/4HANA integration. Document name: "${fname}"\n\nEmail Context:\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}\n\nWord Document Content:\n${extractedText || '(Could not extract text content)'}`;
+                            response = await client.models.generateContent({
+                                model: modelId,
+                                contents: [
+                                    customPrompt,
+                                    fullContent
+                                ],
+                                config: { responseMimeType: 'application/json' },
+                            });
                         } else {
-                            // Office Documents (.docx, .doc, .xlsx, .xls, .pptx, .ppt)
+                            // Office Documents (.xlsx, .xls, .pptx, .ppt)
                             // Treat safely by using email body, metadata and filename to perform contextual parse!
                             const docDescription = `Analyze this document for SAP S/4HANA integration. The document is a Microsoft Office file: "${fname}". Since it is a binary office file, perform a contextual analysis based on the email details:\n\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}`;
                             response = await client.models.generateContent({

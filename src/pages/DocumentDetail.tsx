@@ -704,6 +704,44 @@ export default function DocumentDetail() {
                             alt="Document Preview"
                           />
                         </div>
+                      ) : currentDoc.extracted_text !== undefined && currentDoc.extracted_text !== null ? (
+                        <div className="flex-1 flex flex-col bg-card border border-border rounded-lg overflow-hidden min-h-[500px]">
+                          {/* Text Preview Toolbar */}
+                          <div className="px-4 py-2 border-b border-border bg-muted/30 flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                              <FileText className="h-3.5 w-3.5 text-primary" /> Text Preview
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(currentDoc.extracted_text || "");
+                                toast.success("Extracted text copied to clipboard");
+                              }}
+                              className="p-1 px-2 text-[10px] font-bold text-primary border border-primary/20 hover:border-primary/50 rounded flex items-center gap-1 hover:bg-primary/5 transition-colors focus:outline-none"
+                            >
+                              <Copy className="h-3 w-3" /> Copy Text
+                            </button>
+                          </div>
+                          {/* Text Content */}
+                          <div className="flex-1 p-6 overflow-y-auto max-h-[500px] bg-muted/5 font-sans text-xs text-foreground leading-relaxed whitespace-pre-wrap select-text selection:bg-primary/25">
+                            {currentDoc.extracted_text.trim() || (
+                              <span className="italic text-muted-foreground text-center block py-8">
+                                (No printable text extracted from document)
+                              </span>
+                            )}
+                          </div>
+                          {/* Download Fallback */}
+                          <div className="p-3 border-t border-border bg-card flex items-center justify-between">
+                            <span className="text-[10px] text-muted-foreground">Original format: {fileExt.toUpperCase().slice(1)}</span>
+                            <a
+                              href={fileUrl}
+                              download
+                              className="flex items-center gap-1.5 px-3 py-1 bg-primary/10 border border-primary/20 text-primary rounded font-bold hover:bg-primary hover:text-primary-foreground transition-all text-[10px]"
+                            >
+                              <Download className="h-3 w-3" /> Download Original File
+                            </a>
+                          </div>
+                        </div>
                       ) : (
                         <div className="flex-1 bg-muted/30 flex flex-col items-center justify-center p-8 text-center space-y-4 min-h-[500px]">
                           <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
