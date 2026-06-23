@@ -4106,6 +4106,37 @@ function cleanMismatchedQuotes(jsonString) {
     return result;
 }
 
+function escapeLiteralNewlines(jsonString) {
+    let inString = false;
+    let result = '';
+    let escaped = false;
+
+    for (let i = 0; i < jsonString.length; i++) {
+        const char = jsonString[i];
+
+        if (char === '\\' && inString) {
+            escaped = !escaped;
+            result += char;
+            continue;
+        }
+
+        if (char === '"') {
+            if (!escaped) {
+                inString = !inString;
+            }
+            escaped = false;
+            result += char;
+        } else if ((char === '\n' || char === '\r') && inString) {
+            result += char === '\n' ? '\\n' : '\\r';
+            escaped = false;
+        } else {
+            result += char;
+            escaped = false;
+        }
+    }
+    return result;
+}
+
 function parseAIJSONResponse(text) {
     if (!text) throw new Error('Empty AI response');
     let cleaned = text.trim();
@@ -4128,23 +4159,40 @@ function parseAIJSONResponse(text) {
         cleaned = cleaned.substring(firstBrace, lastBrace + 1);
     }
 
-    // Clean mismatched quotes and comments/commas
-    cleaned = cleanMismatchedQuotes(cleaned);
-
-    // Remove inline or multi-line comments
-    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
-
-    // Remove trailing commas before closing braces/brackets
-    cleaned = cleaned.replace(/,\s*([\]}])/g, '$1');
-
+    // Tier 1: Try parsing the cleaned text directly
     try {
         return JSON.parse(cleaned);
-    } catch (parseErr) {
-        console.error('❌ [AI] Failed to parse repaired JSON. Raw text:');
+    } catch (directErr) {
+        console.warn(`⚠️ [AI] Direct JSON parse failed, attempting standard repairs: ${directErr.message}`);
+    }
+
+    // Tier 2: Standard repairs (newlines, comments, trailing commas)
+    let repaired = cleaned;
+    try {
+        // Escape literal newlines inside JSON string values
+        repaired = escapeLiteralNewlines(repaired);
+        
+        // Remove inline or multi-line comments
+        repaired = repaired.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1');
+
+        // Remove trailing commas before closing braces/brackets
+        repaired = repaired.replace(/,\s*([\]}])/g, '$1');
+
+        return JSON.parse(repaired);
+    } catch (repairErr) {
+        console.warn(`⚠️ [AI] Standard JSON repairs failed, attempting mismatched quote recovery: ${repairErr.message}`);
+    }
+
+    // Tier 3: Mismatched quote recovery
+    try {
+        const quoteCleaned = cleanMismatchedQuotes(repaired);
+        return JSON.parse(quoteCleaned);
+    } catch (quoteErr) {
+        console.error('❌ [AI] All JSON parsing and recovery attempts failed. Raw response:');
         console.error(text);
-        console.error('Repaired text:');
-        console.error(cleaned);
-        throw parseErr;
+        console.error('Final repaired text attempt:');
+        console.error(repaired);
+        throw quoteErr;
     }
 }
 
