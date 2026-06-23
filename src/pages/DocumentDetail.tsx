@@ -58,19 +58,35 @@ export default function DocumentDetail() {
       .catch(() => { });
   }, []);
 
+  const normalizeDoc = (doc: any) => {
+    if (!doc) return null;
+    return {
+      ...doc,
+      data: {
+        header: {},
+        totals: {},
+        line_items: [],
+        exceptions: "",
+        field_origins: {},
+        line_item_origins: {},
+        ...(doc.data || {})
+      }
+    };
+  };
+
   const fetchDocDetail = async () => {
     try {
       const res = await fetch(`${API_BASE}/documents/${id}`);
       if (res.ok) {
         const doc = await res.json();
-        setCurrentDoc(doc);
+        setCurrentDoc(normalizeDoc(doc));
       } else {
         // Fallback to searching the list if single endpoint is not supported
         const listRes = await fetch(`${API_BASE}/documents`);
         const listData = await listRes.json();
         const doc = listData.find((d: any) => d.id === id);
         if (doc) {
-          setCurrentDoc(doc);
+          setCurrentDoc(normalizeDoc(doc));
         } else {
           toast.error("Document not found");
         }
