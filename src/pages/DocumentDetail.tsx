@@ -46,6 +46,7 @@ export default function DocumentDetail() {
   const [sapPayload, setSapPayload] = useState<any>(null);
   const [isPayloadCollapsed, setIsPayloadCollapsed] = useState(true);
   const [isFetchingPayload, setIsFetchingPayload] = useState(false);
+  const [isRefreshingPayload, setIsRefreshingPayload] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
@@ -233,6 +234,44 @@ export default function DocumentDetail() {
       toast.error(err.message || "Failed to connect to backend", { id: "save-doc" });
     } finally {
       setIsSavingChanges(false);
+    }
+  };
+
+  // Refresh payload: save current edits first, then re-fetch the generated payload
+  const handleRefreshPayload = async () => {
+    if (!id) return;
+    setIsRefreshingPayload(true);
+    toast.loading("Saving changes & refreshing payload...", { id: "refresh-payload" });
+    try {
+      // 1. Save current field edits to server
+      const saveRes = await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          header: currentDoc.data?.header,
+          line_items: currentDoc.data?.line_items,
+          totals: currentDoc.data?.totals,
+          exceptions: currentDoc.data?.exceptions
+        })
+      });
+      if (!saveRes.ok) {
+        const errData = await saveRes.json();
+        toast.error(errData.error || "Failed to save changes before refresh", { id: "refresh-payload" });
+        return;
+      }
+      // 2. Re-fetch the live payload from server
+      const payloadRes = await fetch(`${API_BASE}/documents/${encodeURIComponent(id || '')}/sap-payload`);
+      if (payloadRes.ok) {
+        const data = await payloadRes.json();
+        setSapPayload(data);
+        toast.success("Payload refreshed with latest changes!", { id: "refresh-payload" });
+      } else {
+        toast.error("Failed to fetch updated payload", { id: "refresh-payload" });
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to refresh payload", { id: "refresh-payload" });
+    } finally {
+      setIsRefreshingPayload(false);
     }
   };
 
@@ -1330,16 +1369,18 @@ export default function DocumentDetail() {
 
               {/* SAP Ingestion Payload Preview Card */}
               <div className="fiori-card overflow-hidden shadow-sm transition-all duration-300 border border-border/80 bg-card/40 backdrop-blur-sm mt-6">
-                <button
-                  type="button"
-                  onClick={() => setIsPayloadCollapsed(!isPayloadCollapsed)}
-                  className="w-full p-4 flex items-center justify-between hover:bg-muted/30 transition-colors text-left focus:outline-none bg-card/60"
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center">
+                {/* Card Header Row */}
+                <div className="p-4 flex items-center justify-between bg-card/60 border-b border-border/50">
+                  {/* Left: toggle button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsPayloadCollapsed(!isPayloadCollapsed)}
+                    className="flex items-center gap-2 text-left focus:outline-none flex-1 min-w-0"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                       <Code className="h-4 w-4 text-primary" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h3 className="text-xs font-bold uppercase tracking-wider text-foreground font-black">
                         SAP Payload Preview
                       </h3>
@@ -1347,8 +1388,10 @@ export default function DocumentDetail() {
                         {isSuccess ? "Review the JSON payload saved in SAP" : "Live OData JSON payload structure"}
                       </p>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
+                  </button>
+
+                  {/* Right: badges + refresh button + collapse toggle */}
+                  <div className="flex items-center gap-2 shrink-0 ml-3">
                     <span className={cn(
                       "px-2.5 py-0.5 rounded-full text-[9px] font-black tracking-tight border uppercase",
                       isSuccess
@@ -1357,13 +1400,38 @@ export default function DocumentDetail() {
                     )}>
                       {isSuccess ? "Sent Payload" : "Estimated Payload"}
                     </span>
-                    {isPayloadCollapsed ? (
-                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+
+                    {/* Refresh Payload Button */}
+                    {!isSuccess && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleRefreshPayload(); }}
+                        disabled={isRefreshingPayload || isSavingChanges}
+                        title="Save current edits and regenerate the SAP payload"
+                        className={cn(
+                          "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all shadow-sm",
+                          "bg-primary/10 border-primary/20 text-primary hover:bg-primary/20 hover:border-primary/40 hover:shadow-md active:scale-[0.97]",
+                          "disabled:opacity-50 disabled:cursor-not-allowed"
+                        )}
+                      >
+                        <RefreshCw className={cn("h-3 w-3", isRefreshingPayload && "animate-spin")} />
+                        {isRefreshingPayload ? "Refreshing..." : "Refresh Payload"}
+                      </button>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={() => setIsPayloadCollapsed(!isPayloadCollapsed)}
+                      className="p-1 hover:bg-muted/40 rounded transition-colors focus:outline-none"
+                    >
+                      {isPayloadCollapsed ? (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </button>
                   </div>
-                </button>
+                </div>
 
                 {!isPayloadCollapsed && (
                   <div className="p-4 border-t border-border/50 bg-muted/5 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
@@ -1392,11 +1460,45 @@ export default function DocumentDetail() {
                         </div>
 
                         {!isSuccess && (
-                          <div className="p-2.5 bg-amber-500/5 rounded-lg border border-amber-500/10 flex items-start gap-2">
-                            <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
-                            <p className="text-[10px] text-amber-600/90 leading-relaxed font-medium">
-                              This payload updates dynamically based on your edits. Remember to click <strong className="text-amber-700">Save Changes</strong> first to apply any corrections to the payload before posting.
-                            </p>
+                          <div className="space-y-3">
+                            {/* Info hint */}
+                            <div className="p-2.5 bg-amber-500/5 rounded-lg border border-amber-500/10 flex items-start gap-2">
+                              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+                              <p className="text-[10px] text-amber-600/90 leading-relaxed font-medium">
+                                Use <strong className="text-amber-700">Refresh Payload</strong> to preview changes, then <strong className="text-amber-700">Push to SAP</strong> to submit.
+                              </p>
+                            </div>
+
+                            {/* Action row: Refresh + Push */}
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={handleRefreshPayload}
+                                disabled={isRefreshingPayload || isSavingChanges}
+                                className={cn(
+                                  "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold border transition-all shadow-sm",
+                                  "bg-muted/50 border-border text-foreground hover:bg-muted hover:border-border/80 hover:shadow-md active:scale-[0.98]",
+                                  "disabled:opacity-50 disabled:cursor-not-allowed"
+                                )}
+                              >
+                                <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingPayload && "animate-spin")} />
+                                {isRefreshingPayload ? "Refreshing..." : "Refresh Payload"}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={handleApprove}
+                                disabled={isPosting || isLoading || currentDoc?.is_pending || isRefreshingPayload}
+                                className={cn(
+                                  "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all shadow-sm",
+                                  "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-md active:scale-[0.98]",
+                                  "disabled:opacity-50 disabled:cursor-not-allowed"
+                                )}
+                              >
+                                <Zap className={cn("h-3.5 w-3.5", isPosting && "animate-spin")} />
+                                {isPosting ? "Pushing to SAP..." : "Push to SAP"}
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
