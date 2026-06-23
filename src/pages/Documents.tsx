@@ -15,6 +15,7 @@ import {
   Paperclip,
   Trash2,
   RotateCcw,
+  Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +36,7 @@ export default function Documents() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortColumn, setSortColumn] = useState<string>("date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [sapErrorDoc, setSapErrorDoc] = useState<any>(null);
 
   const getContextLabel = (doc: any) => {
     const rawContext = doc.data?.email_metadata?.expected_doc_type || doc.data?.header?.context || "Vendor Invoice";
@@ -556,7 +558,21 @@ export default function Documents() {
                       {doc.data?.sap_document_number || doc.sap_document_number || "—"}
                     </td>
                     <td>
-                      <StatusBadge status={doc.status} />
+                      <div className="flex items-center gap-1.5">
+                        <StatusBadge status={doc.status} />
+                        {(doc.status === 'failed' || doc.status === 'error') && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSapErrorDoc(doc);
+                            }}
+                            className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-all active:scale-[0.9] inline-flex items-center justify-center animate-in fade-in zoom-in duration-200"
+                            title="Show SAP failure details"
+                          >
+                            <Info className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="text-center" onClick={(e) => e.stopPropagation()}>
                       {showDeleted ? (
@@ -577,14 +593,15 @@ export default function Documents() {
                           </button>
                         </div>
                       ) : (
-                        <div className="flex items-center justify-center gap-1.5">
+                        <div className="flex items-center justify-center gap-2">
                           {doc.status === 'failed_parsing' && (
                             <button
                               onClick={() => handleReparse(doc.id)}
-                              className="p-1 text-muted-foreground hover:text-amber-500 rounded hover:bg-amber-500/10 transition-colors"
+                              className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 rounded border border-amber-500/20 transition-all active:scale-95 shadow-sm"
                               title="Retry AI Parse"
                             >
-                              <RefreshCw className="h-3.5 w-3.5" />
+                              <RefreshCw className="h-3 w-3" />
+                              <span>Reparse</span>
                             </button>
                           )}
                           <button
@@ -629,6 +646,60 @@ export default function Documents() {
           </div>
         </div>
       </div>
+
+      {sapErrorDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setSapErrorDoc(null)}>
+          <div 
+            className="bg-card rounded-lg border border-border shadow-2xl overflow-hidden animate-in zoom-in duration-200 flex flex-col w-full max-w-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-border bg-destructive/5 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Info className="h-5 w-5 text-destructive" />
+                <h2 className="text-sm font-bold uppercase tracking-wider text-destructive">
+                  SAP Posting Failure Details
+                </h2>
+              </div>
+              <button
+                onClick={() => setSapErrorDoc(null)}
+                className="text-muted-foreground hover:text-foreground transition-colors p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4 text-xs">
+              <div className="grid grid-cols-3 gap-2 border-b border-border pb-3">
+                <span className="font-semibold text-muted-foreground">Document ID:</span>
+                <span className="col-span-2 font-mono font-medium text-foreground">
+                  {sapErrorDoc.data?.human_readable_id || sapErrorDoc.id}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 border-b border-border pb-3">
+                <span className="font-semibold text-muted-foreground">Supplier:</span>
+                <span className="col-span-2 font-medium text-foreground">
+                  {sapErrorDoc.data?.header?.supplier_name || sapErrorDoc.data?.header?.customer_name || "Unknown"}
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                <span className="font-semibold text-muted-foreground block">Error Message:</span>
+                <div className="bg-destructive/5 border border-destructive/20 text-destructive p-4 rounded-md font-mono whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed shadow-inner">
+                  {sapErrorDoc.data?.sap_error || sapErrorDoc.data?.error || sapErrorDoc.data?.exceptions || "An unknown error occurred during SAP posting."}
+                </div>
+              </div>
+            </div>
+            
+            <div className="px-6 py-4 bg-muted/20 border-t border-border flex justify-end">
+              <button
+                onClick={() => setSapErrorDoc(null)}
+                className="px-4 py-2 text-xs font-bold bg-card border border-border rounded hover:bg-muted transition-all active:scale-[0.98]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
