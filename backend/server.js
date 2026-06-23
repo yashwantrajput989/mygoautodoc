@@ -1002,15 +1002,18 @@ async function enrichDocumentWithApis(docData) {
                     
                     if (matchedMat) {
                         const sapMatNo = matchedMat.Material || matchedMat.Mat_no || matchedMat.MaterialNumber;
-                        console.log(`✅ [API Enrichment] Matched line item ${idx+1} ("${itemDesc}") to SAP Material SKU: ${sapMatNo}`);
+                        const sapMatDesc = matchedMat.MaterialDescription || matchedMat.Mat_desc || matchedMat.MaterialName || matchedMat.Description || '';
+                        console.log(`✅ [API Enrichment] Matched line item ${idx+1} ("${itemDesc}") to SAP Material SKU: ${sapMatNo} and description: ${sapMatDesc}`);
                         
                         docData.line_item_origins[idx] = {
-                            sap_material_number: `Customer Material Info API (${matConfig.name}) - Matched via description/SKU`
+                            sap_material_number: `Customer Material Info API (${matConfig.name}) - Matched via description/SKU`,
+                            sap_material_description: `Customer Material Info API (${matConfig.name}) - Matched via description/SKU`
                         };
                         
                         return {
                             ...item,
-                            sap_material_number: sapMatNo
+                            sap_material_number: sapMatNo,
+                            sap_material_description: sapMatDesc
                         };
                     }
                     return item;

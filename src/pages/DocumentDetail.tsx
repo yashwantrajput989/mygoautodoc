@@ -860,9 +860,10 @@ export default function DocumentDetail() {
                               <thead className="bg-muted/50 border-b border-border">
                                 <tr>
                                   <th className="px-3 py-2 text-left w-14">Item No.</th>
-                                  <th className="px-3 py-2 text-left w-32">{isSalesOrder ? "Cust. Material" : "Supplier Material"}</th>
-                                  <th className="px-3 py-2 text-left">Description</th>
+                                  <th className="px-3 py-2 text-left w-32">{isSalesOrder ? "Cust. Material No." : "Supplier Material No."}</th>
+                                  <th className="px-3 py-2 text-left">Cust. Material Desc</th>
                                   <th className="px-3 py-2 text-left w-32">SAP Material No.</th>
+                                  <th className="px-3 py-2 text-left">SAP Material Desc</th>
                                   <th className="px-3 py-2 text-right w-16">Qty</th>
                                   <th className="px-3 py-2 text-center w-14">UoM</th>
                                   <th className="px-3 py-2 text-right w-20">Price</th>
@@ -899,6 +900,14 @@ export default function DocumentDetail() {
                                         value={item.sap_material_number || ""}
                                         onChange={(e) => handleLineItemChange(i, "sap_material_number", e.target.value)}
                                         className="w-full bg-transparent border-b border-transparent focus:border-primary focus:bg-background focus:outline-none px-1 text-[10px] font-mono"
+                                      />
+                                    </td>
+                                    <td className="px-2 py-1">
+                                      <input
+                                        value={item.sap_material_description || ""}
+                                        onChange={(e) => handleLineItemChange(i, "sap_material_description", e.target.value)}
+                                        placeholder="No SAP Match"
+                                        className="w-full bg-transparent border-b border-transparent focus:border-primary focus:bg-background focus:outline-none px-1 text-[10px]"
                                       />
                                     </td>
                                     <td className="px-2 py-1">
@@ -1112,10 +1121,9 @@ export default function DocumentDetail() {
                             <thead>
                               <tr className="bg-muted/30 border-b border-border">
                                 <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Item</th>
-                                <th className="p-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Description</th>
-                                <th className="p-3 text-[10px] font-bold text-red-500 uppercase tracking-wider bg-red-500/5">AI Customer/Supplier SKU</th>
-                                <th className="p-3 text-[10px] font-bold text-indigo-600 uppercase tracking-wider bg-indigo-500/5">CMIR Lookup API Match</th>
-                                <th className="p-3 text-[10px] font-bold text-emerald-600 uppercase tracking-wider bg-emerald-500/5">Final SAP Push SKU</th>
+                                <th className="p-3 text-[10px] font-bold text-red-500 uppercase tracking-wider bg-red-500/5">AI Customer Material (No. & Desc)</th>
+                                <th className="p-3 text-[10px] font-bold text-indigo-600 uppercase tracking-wider bg-indigo-500/5">SAP Master Data CMIR Match (No. & Desc)</th>
+                                <th className="p-3 text-[10px] font-bold text-emerald-600 uppercase tracking-wider bg-emerald-500/5">Final SAP Push Staging (No. & Desc)</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-border">
@@ -1125,21 +1133,35 @@ export default function DocumentDetail() {
                                 return (
                                   <tr key={idx} className="hover:bg-muted/10 transition-colors">
                                     <td className="p-3 font-bold text-muted-foreground">{item.item_number || (idx + 1)}</td>
-                                    <td className="p-3 font-semibold text-foreground truncate max-w-[200px]" title={item.material_description}>
-                                      {item.material_description}
+                                    <td className="p-3 bg-red-500/5">
+                                      <div className="font-mono text-[11px] text-red-700 font-bold">
+                                        {aiItem ? (aiItem.customer_material_number || aiItem.supplier_material_number || "—") : "—"}
+                                      </div>
+                                      <div className="text-[10px] text-muted-foreground mt-0.5 truncate max-w-[220px]" title={aiItem?.material_description}>
+                                        {aiItem ? (aiItem.material_description || "—") : "—"}
+                                      </div>
                                     </td>
-                                    <td className="p-3 bg-red-500/5 font-mono text-[11px] text-red-700">
-                                      {aiItem ? (aiItem.customer_material_number || aiItem.supplier_material_number || "—") : "—"}
-                                    </td>
-                                    <td className="p-3 bg-indigo-500/5 font-mono text-[11px] text-indigo-700 font-bold">
+                                    <td className="p-3 bg-indigo-500/5">
                                       {hasCmirMatch ? (
-                                        item.sap_material_number
+                                        <>
+                                          <div className="font-mono text-[11px] text-indigo-700 font-bold">
+                                            {item.sap_material_number}
+                                          </div>
+                                          <div className="text-[10px] text-indigo-900 mt-0.5 font-semibold truncate max-w-[220px]" title={item.sap_material_description}>
+                                            {item.sap_material_description || "—"}
+                                          </div>
+                                        </>
                                       ) : (
-                                        <span className="text-muted-foreground font-normal italic">No CMIR API SKU match</span>
+                                        <span className="text-muted-foreground font-normal italic text-[10px]">No CMIR API Match</span>
                                       )}
                                     </td>
-                                    <td className="p-3 bg-emerald-500/5 font-mono text-[11px] text-emerald-700 font-black">
-                                      {item.sap_material_number || "—"}
+                                    <td className="p-3 bg-emerald-500/5">
+                                      <div className="font-mono text-[11px] text-emerald-700 font-black">
+                                        {item.sap_material_number || "—"}
+                                      </div>
+                                      <div className="text-[10px] text-emerald-900 mt-0.5 font-bold truncate max-w-[220px]" title={item.sap_material_description || item.material_description}>
+                                        {item.sap_material_description || item.material_description || "—"}
+                                      </div>
                                     </td>
                                   </tr>
                                 );
