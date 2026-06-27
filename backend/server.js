@@ -755,14 +755,22 @@ async function enrichDocumentWithApis(docData) {
         docData.field_origins = {};
     }
     
-    const docContext = docData.header?.context || docData.email_metadata?.expected_doc_type || 'SalesOrder';
+    const emailMeta = docData.email_metadata || {};
+    
+    // Resolve routing/sales area from Business Partner mappings based on sender
+    const fromStr = emailMeta.from || '';
+    const match = fromStr.match(/<([^>]+)>/);
+    const senderEmail = match ? match[1].trim().toLowerCase() : fromStr.trim().toLowerCase();
+    
+    const matchedMapping = senderEmail ? (settings.bp_mappings || []).find(
+        m => m.email?.trim().toLowerCase() === senderEmail
+    ) : null;
+
+    const docContext = matchedMapping?.expected_doc_type || docData.header?.context || docData.email_metadata?.expected_doc_type || 'SalesOrder';
     const isSalesOrder = !(docContext.toLowerCase().includes('invoice') || docContext.toLowerCase().includes('vendor'));
     docData.header.context = isSalesOrder ? "Sales Order" : "Vendor Invoice";
 
-    const emailMeta = docData.email_metadata || {};
-    const recipientEmail = emailMeta.recipient_email || '';
-    const matchingEmailConf = recipientEmail ? (settings.emails || []).find(e => e.email?.toLowerCase() === recipientEmail.toLowerCase()) : null;
-    const custName = matchingEmailConf?.customer_name || docData.header?.customer_name || docData.header?.supplier_name || '';
+    const custName = matchedMapping?.partnerName || docData.header?.customer_name || docData.header?.supplier_name || '';
 
     // Define helper to safely set values only if currently blank/empty
     const setField = (field, defaultValue, source) => {
@@ -781,13 +789,18 @@ async function enrichDocumentWithApis(docData) {
     };
 
     // Track base metadata origins
-    if (emailMeta.customer_name) {
+    if (matchedMapping?.partnerName) {
+        setField("customer_name", matchedMapping.partnerName, "Business Partner Mapping Settings");
+    } else if (emailMeta.customer_name) {
         setField("customer_name", emailMeta.customer_name, "Gmail/Outlook Domain Settings");
     } else {
         setField("customer_name", custName || (isSalesOrder ? "BP-CUST Customer" : "BP-CUST Vendor"), "AI Model Extraction");
     }
     
-    if (emailMeta.customer_address) {
+    if (matchedMapping?.customer_address) {
+        setField("customer_address", matchedMapping.customer_address, "Business Partner Mapping Settings");
+        setField("sold_to_address", matchedMapping.customer_address, "Business Partner Mapping Settings");
+    } else if (emailMeta.customer_address) {
         setField("customer_address", emailMeta.customer_address, "Gmail/Outlook Domain Settings (Sold-to Address)");
         setField("sold_to_address", emailMeta.customer_address, "Gmail/Outlook Domain Settings (Sold-to Address)");
     } else {
@@ -798,11 +811,11 @@ async function enrichDocumentWithApis(docData) {
 
     if (isSalesOrder) {
         // Sales organization
-        if (matchingEmailConf?.sales_org) {
-            docData.header.sales_organization = matchingEmailConf.sales_org;
+        if (matchedMapping?.sales_org) {
+            docData.header.sales_organization = matchedMapping.sales_org;
             docData.field_origins.sales_organization = {
-                value: matchingEmailConf.sales_org,
-                source: "Gmail/Outlook Connection Settings"
+                value: matchedMapping.sales_org,
+                source: "Business Partner Mapping Settings"
             };
         } else if (emailMeta.sales_org) {
             docData.header.sales_organization = emailMeta.sales_org;
@@ -815,11 +828,11 @@ async function enrichDocumentWithApis(docData) {
         }
 
         // Distribution channel
-        if (matchingEmailConf?.distr_chan) {
-            docData.header.distribution_channel = matchingEmailConf.distr_chan;
+        if (matchedMapping?.distr_chan) {
+            docData.header.distribution_channel = matchedMapping.distr_chan;
             docData.field_origins.distribution_channel = {
-                value: matchingEmailConf.distr_chan,
-                source: "Gmail/Outlook Connection Settings"
+                value: matchedMapping.distr_chan,
+                source: "Business Partner Mapping Settings"
             };
         } else if (emailMeta.distr_chan) {
             docData.header.distribution_channel = emailMeta.distr_chan;
@@ -832,11 +845,11 @@ async function enrichDocumentWithApis(docData) {
         }
 
         // Division
-        if (matchingEmailConf?.division) {
-            docData.header.division = matchingEmailConf.division;
+        if (matchedMapping?.division) {
+            docData.header.division = matchedMapping.division;
             docData.field_origins.division = {
-                value: matchingEmailConf.division,
-                source: "Gmail/Outlook Connection Settings"
+                value: matchedMapping.division,
+                source: "Business Partner Mapping Settings"
             };
         } else if (emailMeta.division) {
             docData.header.division = emailMeta.division;
@@ -848,8 +861,8 @@ async function enrichDocumentWithApis(docData) {
             setField("division", "01", "Default Fallback");
         }
 
-        setField("sold_to_party_number", "BP-CUST", "Default Fallback");
-        setField("ship_to_party_number", docData.header.sold_to_party_number || "BP-CUST", "Default Fallback");
+        setField("sold_to_party_number", matchedMapping?.partnerName || "BP-CUST", "Default Fallback");
+        setField("ship_to_party_number", docData.header.sold_to_party_number || matchedMapping?.partnerName || "BP-CUST", "Default Fallback");
 
         // Dates
         const todayStr = new Date().toISOString().slice(0, 10);
@@ -864,15 +877,15 @@ async function enrichDocumentWithApis(docData) {
         setField("customer_po_number", resolvedPoNum, "Default Fallback");
     } else {
         // Supplier Number
-        setField("supplier_number", "BP-CUST", "Default Fallback");
+        setField("supplier_number", matchedMapping?.partnerName || "BP-CUST", "Default Fallback");
         setField("supplier_name", custName || "BP-CUST Vendor", "Default Fallback");
 
         // Company Code
-        if (matchingEmailConf?.company_code) {
-            docData.header.company_code = matchingEmailConf.company_code;
+        if (matchedMapping?.company_code) {
+            docData.header.company_code = matchedMapping.company_code;
             docData.field_origins.company_code = {
-                value: matchingEmailConf.company_code,
-                source: "Gmail/Outlook Connection Settings"
+                value: matchedMapping.company_code,
+                source: "Business Partner Mapping Settings"
             };
         } else if (emailMeta.company_code) {
             docData.header.company_code = emailMeta.company_code;
@@ -1445,6 +1458,26 @@ app.post('/api/settings/pricing', async (req, res) => {
             customer_requested_price: current.customer_requested_price,
             calculate_price_formula: current.calculate_price_formula,
             price_formula_type: current.price_formula_type
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/settings/sales-order', async (req, res) => {
+    try {
+        const { sales_order_default_type, sales_order_default_block, sales_order_pricing_condition } = req.body;
+        const current = await getSettings();
+        current.sales_order_default_type = sales_order_default_type || "OR1";
+        current.sales_order_default_block = sales_order_default_block || "";
+        current.sales_order_pricing_condition = sales_order_pricing_condition || "PR00";
+        await saveSettings(current);
+        res.json({
+            success: true,
+            message: 'Sales Order settings saved successfully',
+            sales_order_default_type: current.sales_order_default_type,
+            sales_order_default_block: current.sales_order_default_block,
+            sales_order_pricing_condition: current.sales_order_pricing_condition
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -2608,7 +2641,11 @@ function buildSAPPayload(docData, settings) {
 
         // Define values for standard fields only if present in header (no default fallbacks like "1010" or "01")
         if (resolvedContext === 'SalesOrder') {
-            payload.SalesOrderType = "OR1";
+            payload.SalesOrderType = settings.sales_order_default_type || "OR1";
+            if (settings.sales_order_default_block) {
+                payload.HeaderBillingBlockReason = settings.sales_order_default_block;
+                payload.DeliveryBlockReason = settings.sales_order_default_block;
+            }
             if (docData.header?.sales_organization) {
                 payload.SalesOrganization = docData.header.sales_organization;
             }
@@ -2688,6 +2725,26 @@ function buildSAPPayload(docData, settings) {
                     itemPayload[m.targetField] = val;
                 }
             });
+
+            if (resolvedContext === 'SalesOrder') {
+                const pricingConditionType = settings.sales_order_pricing_condition;
+                if (pricingConditionType) {
+                    const itemPrice = item.price || item.unit_price || "0.00";
+                    const parsedPrice = parseFloat(itemPrice);
+                    const conditionRate = isNaN(parsedPrice) ? "0.00" : parsedPrice.toFixed(2);
+                    const conditionCurrency = docData.totals?.currency || "USD";
+                    itemPayload.to_PricingElement = [
+                        {
+                            ConditionType: pricingConditionType,
+                            ConditionRateValue: conditionRate,
+                            ConditionCurrency: conditionCurrency,
+                            ConditionQuantity: "1",
+                            ConditionQuantityUnit: itemPayload.RequestedQuantityUnit || item.unit_of_measure || "EA"
+                        }
+                    ];
+                }
+            }
+
             return itemPayload;
         });
 
@@ -2729,17 +2786,52 @@ function buildSAPPayload(docData, settings) {
             if (item.plant || docData.header?.plant) {
                 itemPayload.ProductionPlant = item.plant || docData.header?.plant;
             }
+
+            const pricingConditionType = settings.sales_order_pricing_condition;
+            if (pricingConditionType) {
+                const itemPrice = item.price || item.unit_price || "0.00";
+                const parsedPrice = parseFloat(itemPrice);
+                const conditionRate = isNaN(parsedPrice) ? "0.00" : parsedPrice.toFixed(2);
+                const conditionCurrency = docData.totals?.currency || "USD";
+                itemPayload.to_PricingElement = [
+                    {
+                        ConditionType: pricingConditionType,
+                        ConditionRateValue: conditionRate,
+                        ConditionCurrency: conditionCurrency,
+                        ConditionQuantity: "1",
+                        ConditionQuantityUnit: uom
+                    }
+                ];
+            }
+
             return itemPayload;
         });
 
         if (lineItems.length === 0) {
-            lineItems.push({
+            const defaultUom = "EA";
+            const fallbackItem = {
                 SalesOrderItem: "10",
                 MaterialByCustomer: "ARFL100AM",
                 RequestedQuantity: "2",
-                RequestedQuantityUnit: "EA",
+                RequestedQuantityUnit: defaultUom,
                 ProductionPlant: "1010"
-            });
+            };
+
+            const pricingConditionType = settings.sales_order_pricing_condition;
+            if (pricingConditionType) {
+                const conditionCurrency = docData.totals?.currency || "USD";
+                fallbackItem.to_PricingElement = [
+                    {
+                        ConditionType: pricingConditionType,
+                        ConditionRateValue: "100.00",
+                        ConditionCurrency: conditionCurrency,
+                        ConditionQuantity: "1",
+                        ConditionQuantityUnit: defaultUom
+                    }
+                ];
+            }
+
+            lineItems.push(fallbackItem);
         }
 
         let btpSoldTo = soldToParty;
@@ -2748,10 +2840,14 @@ function buildSAPPayload(docData, settings) {
         }
 
         return {
-            SalesOrderType: "OR1",
+            SalesOrderType: settings.sales_order_default_type || "OR1",
             ...(docData.header?.sales_organization ? { SalesOrganization: docData.header.sales_organization } : {}),
             ...(docData.header?.distribution_channel ? { DistributionChannel: docData.header.distribution_channel } : {}),
             ...(docData.header?.division ? { OrganizationDivision: docData.header.division } : {}),
+            ...(settings.sales_order_default_block ? {
+                HeaderBillingBlockReason: settings.sales_order_default_block,
+                DeliveryBlockReason: settings.sales_order_default_block
+            } : {}),
             SoldToParty: btpSoldTo,
             PurchaseOrderByCustomer: poNum,
             SalesOrderDate: btpDate,
@@ -2778,7 +2874,7 @@ function buildSAPPayload(docData, settings) {
             const uom = item.unit_of_measure || "EA";
 
             return {
-                Doc_typ: "OR1",
+                Doc_typ: settings.sales_order_default_type || "OR1",
                 Item_num: itemNum,
                 Material1: material,
                 Quantity: qty,
@@ -2790,7 +2886,7 @@ function buildSAPPayload(docData, settings) {
 
         if (lineItems.length === 0) {
             lineItems.push({
-                Doc_typ: "OR1",
+                Doc_typ: settings.sales_order_default_type || "OR1",
                 Item_num: "10",
                 Material1: "ARFL100AM",
                 Quantity: "1",
@@ -2801,7 +2897,7 @@ function buildSAPPayload(docData, settings) {
         }
 
         return {
-            Doc_typ: "OR1",
+            Doc_typ: settings.sales_order_default_type || "OR1",
             ...(docData.header?.sales_organization ? { Sales_org: docData.header.sales_organization } : {}),
             ...(docData.header?.distribution_channel ? { Distr_chan: docData.header.distribution_channel } : {}),
             ...(docData.header?.division ? { Division: docData.header.division } : {}),
@@ -2811,8 +2907,8 @@ function buildSAPPayload(docData, settings) {
             Req_deli_date: formatSAPDate(docData.header?.requested_date || docData.header?.requested_delivery_date || poDate),
             Cust_po_num: poNum,
             Cust_po_date: formatSAPDate(poDate),
-            Deliv_block: "01",
-            Bill_block: "02",
+            Deliv_block: settings.sales_order_default_block !== undefined ? settings.sales_order_default_block : "01",
+            Bill_block: settings.sales_order_default_block !== undefined ? settings.sales_order_default_block : "02",
             Pay_terms: paymentTerms,
             Inco_term1: incoTerms.length > 3 ? incoTerms.substring(0, 3).toUpperCase() : incoTerms.toUpperCase(),
             Inco_term2: "HYD",
@@ -3444,18 +3540,10 @@ async function runGmailSync(settings, isFirstSync) {
         const user = emailConf.email;
         const password = (emailConf.password || '').replace(/ /g, '');
         const host = emailConf.server || 'imap.gmail.com';
-        const expectedDocType = emailConf.expected_doc_type || 'Invoice';
-        const domain = emailConf.domain || '';
-        const customerName = emailConf.customer_name || '';
-        const customerAddress = emailConf.customer_address || '';
-        const salesOrg = emailConf.sales_org || '';
-        const distrChan = emailConf.distr_chan || '';
-        const division = emailConf.division || '';
-        const companyCode = emailConf.company_code || '';
 
         let imap;
         try {
-            console.log(`📫 [Sync] Checking Gmail for ${user} (expects: ${expectedDocType}, domain: ${domain})...`);
+            console.log(`📫 [Sync] Checking Gmail for ${user}...`);
             imap = await imapConnect({ user, password, host });
             await imapOpenBox(imap, 'INBOX');
 
@@ -3477,32 +3565,24 @@ async function runGmailSync(settings, isFirstSync) {
                     const bodyContent = parsed.text || '';
                     const allAttachments = (parsed.attachments || []).map((a) => a.filename).filter(Boolean);
 
-                    // Domain inheritance lookup for incoming email domain matching
-                    let finalDomain = domain;
-                    let finalCustName = customerName;
-                    let finalCustAddr = customerAddress;
-                    let finalSalesOrg = salesOrg;
-                    let finalDistrChan = distrChan;
-                    let finalDivision = division;
-                    let finalCompanyCode = companyCode;
-
                     const senderEmail = from.includes('<') ? (from.match(/<([^>]+)>/)?.[1]?.trim() || from) : from;
-                    const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1].trim().toLowerCase() : '';
+                    const cleanSender = senderEmail.trim().toLowerCase();
 
-                    if (senderDomain) {
-                        const matchedDomainConf = (settings.emails || []).find(e => 
-                            e.domain && e.domain.toLowerCase() === senderDomain
-                        );
-                        if (matchedDomainConf) {
-                            finalDomain = matchedDomainConf.domain || finalDomain;
-                            finalCustName = matchedDomainConf.customer_name || finalCustName;
-                            finalCustAddr = matchedDomainConf.customer_address || finalCustAddr;
-                            finalSalesOrg = matchedDomainConf.sales_org || finalSalesOrg;
-                            finalDistrChan = matchedDomainConf.distr_chan || finalDistrChan;
-                            finalDivision = matchedDomainConf.division || finalDivision;
-                            finalCompanyCode = matchedDomainConf.company_code || finalCompanyCode;
-                            console.log(`📫 [Sync] Inherited domain settings from domain config "${senderDomain}": Customer Name: "${finalCustName}"`);
-                        }
+                    // Resolve routing details from the Business Partner mappings matching the sender email
+                    const matchedMapping = (settings.bp_mappings || []).find(
+                        m => m.email && m.email.trim().toLowerCase() === cleanSender
+                    );
+
+                    const finalExpectedDocType = matchedMapping?.expected_doc_type || 'Vendor Invoice';
+                    const finalCustName = matchedMapping?.partnerName || '';
+                    const finalCustAddr = matchedMapping?.customer_address || '';
+                    const finalSalesOrg = matchedMapping?.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
+                    const finalDistrChan = matchedMapping?.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                    const finalDivision = matchedMapping?.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                    const finalCompanyCode = matchedMapping?.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
+
+                    if (matchedMapping) {
+                        console.log(`📫 [Sync] Mapped sender ${cleanSender} to partner ${finalCustName} (expects: ${finalExpectedDocType})`);
                     }
 
                     // Process all supported attachments (PDF, Images, Office Docs, Plain Text)
@@ -3537,8 +3617,8 @@ async function runGmailSync(settings, isFirstSync) {
                             all_attachments: allAttachments,
                             original_filename: att.filename,
                             is_body_only: false,
-                            expected_doc_type: expectedDocType,
-                            domain: finalDomain,
+                            expected_doc_type: finalExpectedDocType,
+                            domain: '',
                             customer_name: finalCustName,
                             customer_address: finalCustAddr,
                             sales_org: finalSalesOrg,
@@ -3582,8 +3662,8 @@ async function runGmailSync(settings, isFirstSync) {
                                     all_attachments: [],
                                     original_filename: 'Email Body Content',
                                     is_body_only: true,
-                                    expected_doc_type: expectedDocType,
-                                    domain: finalDomain,
+                                    expected_doc_type: finalExpectedDocType,
+                                    domain: '',
                                     customer_name: finalCustName,
                                     customer_address: finalCustAddr,
                                     sales_org: finalSalesOrg,
@@ -3798,17 +3878,8 @@ async function runOutlookSync(isFirstSync) {
 
         const headers = { Authorization: `Bearer ${token}` };
         const user_principal_name = account.email;
-        const expectedDocType = account.expected_doc_type || 'Invoice';
-        const domain = account.domain || '';
-        const customerName = account.customer_name || '';
-        const customerAddress = account.customer_address || '';
-        const salesOrg = account.sales_org || '';
-        const distrChan = account.distr_chan || '';
-        const division = account.division || '';
-        const companyCode = account.company_code || '';
-
         try {
-            console.log(`📫 [Sync] Checking Outlook for ${user_principal_name} (expects: ${expectedDocType}, domain: ${domain})...`);
+            console.log(`📫 [Sync] Checking Outlook for ${user_principal_name}...`);
             let filterQuery = '$filter=isRead eq false';
             if (isFirstSync) {
                 filterQuery += '&$top=50';
@@ -3868,32 +3939,24 @@ async function runOutlookSync(isFirstSync) {
                             cleanBody = stripHtml(cleanBody);
                         }
 
-                        // Domain inheritance lookup for incoming email domain matching
-                        let finalDomain = domain;
-                        let finalCustName = customerName;
-                        let finalCustAddr = customerAddress;
-                        let finalSalesOrg = salesOrg;
-                        let finalDistrChan = distrChan;
-                        let finalDivision = division;
-                        let finalCompanyCode = companyCode;
-
                         const senderEmail = from.includes('<') ? (from.match(/<([^>]+)>/)?.[1]?.trim() || from) : from;
-                        const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1].trim().toLowerCase() : '';
+                        const cleanSender = senderEmail.trim().toLowerCase();
 
-                        if (senderDomain) {
-                            const matchedDomainConf = (settings.emails || []).find(e => 
-                                e.domain && e.domain.toLowerCase() === senderDomain
-                            );
-                            if (matchedDomainConf) {
-                                finalDomain = matchedDomainConf.domain || finalDomain;
-                                finalCustName = matchedDomainConf.customer_name || finalCustName;
-                                finalCustAddr = matchedDomainConf.customer_address || finalCustAddr;
-                                finalSalesOrg = matchedDomainConf.sales_org || finalSalesOrg;
-                                finalDistrChan = matchedDomainConf.distr_chan || finalDistrChan;
-                                finalDivision = matchedDomainConf.division || finalDivision;
-                                finalCompanyCode = matchedDomainConf.company_code || finalCompanyCode;
-                                console.log(`📫 [Sync] Outlook inherited domain settings from domain config "${senderDomain}": Customer Name: "${finalCustName}"`);
-                            }
+                        // Resolve routing details from the Business Partner mappings matching the sender email
+                        const matchedMapping = (settings.bp_mappings || []).find(
+                            m => m.email && m.email.trim().toLowerCase() === cleanSender
+                        );
+
+                        const finalExpectedDocType = matchedMapping?.expected_doc_type || 'Vendor Invoice';
+                        const finalCustName = matchedMapping?.partnerName || '';
+                        const finalCustAddr = matchedMapping?.customer_address || '';
+                        const finalSalesOrg = matchedMapping?.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
+                        const finalDistrChan = matchedMapping?.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                        const finalDivision = matchedMapping?.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                        const finalCompanyCode = matchedMapping?.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
+
+                        if (matchedMapping) {
+                            console.log(`📫 [Sync] Outlook mapped sender ${cleanSender} to partner ${finalCustName} (expects: ${finalExpectedDocType})`);
                         }
 
                         const meta = {
@@ -3906,8 +3969,8 @@ async function runOutlookSync(isFirstSync) {
                             all_attachments: allAttachmentNames,
                             original_filename: att.name,
                             is_body_only: false,
-                            expected_doc_type: expectedDocType,
-                            domain: finalDomain,
+                            expected_doc_type: finalExpectedDocType,
+                            domain: '',
                             customer_name: finalCustName,
                             customer_address: finalCustAddr,
                             sales_org: finalSalesOrg,
@@ -3948,32 +4011,24 @@ async function runOutlookSync(isFirstSync) {
                                 cleanBody = stripHtml(cleanBody);
                             }
 
-                            // Domain inheritance lookup for incoming email domain matching
-                            let finalDomain = domain;
-                            let finalCustName = customerName;
-                            let finalCustAddr = customerAddress;
-                            let finalSalesOrg = salesOrg;
-                            let finalDistrChan = distrChan;
-                            let finalDivision = division;
-                            let finalCompanyCode = companyCode;
-
                             const senderEmail = from.includes('<') ? (from.match(/<([^>]+)>/)?.[1]?.trim() || from) : from;
-                            const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1].trim().toLowerCase() : '';
+                            const cleanSender = senderEmail.trim().toLowerCase();
 
-                            if (senderDomain) {
-                                const matchedDomainConf = (settings.emails || []).find(e => 
-                                    e.domain && e.domain.toLowerCase() === senderDomain
-                                );
-                                if (matchedDomainConf) {
-                                    finalDomain = matchedDomainConf.domain || finalDomain;
-                                    finalCustName = matchedDomainConf.customer_name || finalCustName;
-                                    finalCustAddr = matchedDomainConf.customer_address || finalCustAddr;
-                                    finalSalesOrg = matchedDomainConf.sales_org || finalSalesOrg;
-                                    finalDistrChan = matchedDomainConf.distr_chan || finalDistrChan;
-                                    finalDivision = matchedDomainConf.division || finalDivision;
-                                    finalCompanyCode = matchedDomainConf.company_code || finalCompanyCode;
-                                    console.log(`📫 [Sync] Outlook inherited domain settings from domain config "${senderDomain}": Customer Name: "${finalCustName}"`);
-                                }
+                            // Resolve routing details from the Business Partner mappings matching the sender email
+                            const matchedMapping = (settings.bp_mappings || []).find(
+                                m => m.email && m.email.trim().toLowerCase() === cleanSender
+                            );
+
+                            const finalExpectedDocType = matchedMapping?.expected_doc_type || 'Vendor Invoice';
+                            const finalCustName = matchedMapping?.partnerName || '';
+                            const finalCustAddr = matchedMapping?.customer_address || '';
+                            const finalSalesOrg = matchedMapping?.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
+                            const finalDistrChan = matchedMapping?.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                            const finalDivision = matchedMapping?.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                            const finalCompanyCode = matchedMapping?.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
+
+                            if (matchedMapping) {
+                                console.log(`📫 [Sync] Outlook body mapped sender ${cleanSender} to partner ${finalCustName} (expects: ${finalExpectedDocType})`);
                             }
 
                             const meta = {
@@ -3986,8 +4041,8 @@ async function runOutlookSync(isFirstSync) {
                                 all_attachments: [],
                                 original_filename: 'Email Body Content',
                                 is_body_only: true,
-                                expected_doc_type: expectedDocType,
-                                domain: finalDomain,
+                                expected_doc_type: finalExpectedDocType,
+                                domain: '',
                                 customer_name: finalCustName,
                                 customer_address: finalCustAddr,
                                 sales_org: finalSalesOrg,

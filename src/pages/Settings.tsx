@@ -26,6 +26,7 @@ import {
   Table,
   DollarSign,
   RefreshCw,
+  ShoppingCart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,7 @@ const sidebarItems = [
   { id: "duplicates", label: "Duplicate Detection", icon: ShieldCheck },
   { id: "mappings", label: "Mapping Table", icon: Table },
   { id: "pricing", label: "Price Determination", icon: DollarSign },
+  { id: "sales_order_context", label: "Sales Order Context", icon: ShoppingCart },
   { id: "roles", label: "Manage Roles", icon: Key },
   { id: "credits", label: "Manage AI Credits", icon: Zap },
   { id: "users", label: "User Management", icon: Users },
@@ -83,6 +85,7 @@ export default function SettingsPage() {
           {activeTab === "credits" && <ManageCredits />}
           {activeTab === "users" && <ManageUsers />}
           {activeTab === "pricing" && <PriceDeterminationSettings />}
+          {activeTab === "sales_order_context" && <SalesOrderContextSettings />}
         </div>
       </div>
     </div>
@@ -435,18 +438,12 @@ function ManageSources() {
   
   // Add email wizard state
   const [isAdding, setIsAdding] = useState(false);
-  const [addStep, setAddStep] = useState(1); // 1: Select Provider, 2: Routing Config, 3: Connection Info
+  const [addStep, setAddStep] = useState(1); // 1: Choose Email Provider Type, 2: Connection Info
   const [selectedProvider, setSelectedProvider] = useState<"Gmail" | "Outlook">("Gmail");
   
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newServer, setNewServer] = useState("imap.gmail.com");
-  const [newDocType, setNewDocType] = useState("Vendor Invoice");
-  const [newDomain, setNewDomain] = useState("");
-  const [newCustomerName, setNewCustomerName] = useState("");
-  const [newCustomerAddress, setNewCustomerAddress] = useState("");
-  const [newSalesOrg, setNewSalesOrg] = useState("1010");
-  const [newDistrChan, setNewDistrChan] = useState("01");
   
   // Testing connection state map: email -> boolean
   const [isTestingEmail, setIsTestingEmail] = useState<Record<string, boolean>>({});
@@ -480,44 +477,6 @@ function ManageSources() {
       toast.error(err.message || "Failed to fetch Business Partner");
     } finally {
       setIsFetchingBP(false);
-    }
-  };
-
-  const [isFetchingWizardAddress, setIsFetchingWizardAddress] = useState(false);
-
-  const handleFetchWizardAddress = async () => {
-    if (!newCustomerName.trim()) {
-      toast.error("Please enter a Customer Name/Number first");
-      return;
-    }
-    setIsFetchingWizardAddress(true);
-    try {
-      const res = await fetch(`${API_BASE}/sap/business-partner?query=${encodeURIComponent(newCustomerName.trim())}`);
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to fetch Business Partner from SAP");
-      }
-      
-      const addrList = data.to_BusinessPartnerAddress?.results || data.to_BusinessPartnerAddress || [];
-      const addr = Array.isArray(addrList) ? addrList[0] : addrList;
-      if (!addr) {
-        toast.warning("No address record found in SAP for this Business Partner");
-        setNewCustomerAddress("No Address Record in SAP");
-        return;
-      }
-      const street = addr.StreetName || addr.Street || '';
-      const city = addr.CityName || addr.City || '';
-      const postal = addr.PostalCode || '';
-      const country = addr.Country || '';
-      const formattedAddr = [street, city, postal, country].filter(Boolean).join(', ');
-      
-      setNewCustomerAddress(formattedAddr || "No Address Record in SAP");
-      toast.success("Customer address successfully loaded from SAP!");
-    } catch (err: any) {
-      console.error(err);
-      toast.error(err.message || "Failed to fetch customer address from SAP");
-    } finally {
-      setIsFetchingWizardAddress(false);
     }
   };
 
@@ -555,22 +514,11 @@ function ManageSources() {
         // Handle Outlook authentication callback success redirect
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('outlook') === 'success' && data.outlook_tokens) {
-          const pendingType = sessionStorage.getItem('pending_outlook_doctype') || 'Vendor Invoice';
-          const pendingCustomerName = sessionStorage.getItem('pending_outlook_customer_name') || '';
-          
           const newOutlookEmail = {
             id: Date.now(),
             email: data.outlook_tokens.user_principal_name || 'Outlook Mail',
             provider: 'Outlook',
             outlook_tokens: data.outlook_tokens,
-            expected_doc_type: pendingType,
-            domain: "",
-            customer_name: pendingCustomerName,
-            customer_address: "",
-            sales_org: "",
-            distr_chan: "",
-            division: "",
-            company_code: "",
             active: true
           };
 
@@ -592,9 +540,6 @@ function ManageSources() {
             }
           });
 
-          // Clear session storage and URL query
-          sessionStorage.removeItem('pending_outlook_doctype');
-          sessionStorage.removeItem('pending_outlook_customer_name');
           window.history.replaceState({}, document.title, window.location.pathname);
         } else {
           setEmails(currentEmails);
@@ -673,14 +618,6 @@ function ManageSources() {
       email: newEmail.trim(),
       password: newPassword,
       server: newServer.trim() || "imap.gmail.com",
-      expected_doc_type: newDocType,
-      domain: "",
-      customer_name: newCustomerName.trim(),
-      customer_address: "",
-      sales_org: "",
-      distr_chan: "",
-      division: "",
-      company_code: "",
       active: true,
       provider: "Gmail"
     };
@@ -690,10 +627,6 @@ function ManageSources() {
   };
 
   const handleAddEmailOutlook = () => {
-    // Save choices to session storage so we retrieve them on success callback redirect
-    sessionStorage.setItem('pending_outlook_doctype', newDocType);
-    sessionStorage.setItem('pending_outlook_customer_name', newCustomerName);
-    
     toast.info("Redirecting to Microsoft secure sign-in portal...");
     window.location.href = `${API_BASE}/auth/outlook/login?redirect=true`;
   };
@@ -702,12 +635,6 @@ function ManageSources() {
     setNewEmail("");
     setNewPassword("");
     setNewServer("imap.gmail.com");
-    setNewDocType("Vendor Invoice");
-    setNewDomain("");
-    setNewCustomerName("");
-    setNewCustomerAddress("");
-    setNewSalesOrg("1010");
-    setNewDistrChan("01");
     setIsAdding(false);
     setAddStep(1);
   };
@@ -759,13 +686,12 @@ function ManageSources() {
             <div className="flex items-center justify-between border-b border-border/50 pb-4">
               <div>
                 <h4 className="text-xs font-bold uppercase tracking-wider text-primary">Add Email Intake Connection</h4>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Setup new ingestion channel routing rules</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Setup new ingestion channel credentials</p>
               </div>
               <div className="flex items-center gap-2">
                 <span className={cn("w-2 h-2 rounded-full", addStep >= 1 ? "bg-primary" : "bg-muted")} />
                 <span className={cn("w-2 h-2 rounded-full", addStep >= 2 ? "bg-primary" : "bg-muted")} />
-                <span className={cn("w-2 h-2 rounded-full", addStep >= 3 ? "bg-primary" : "bg-muted")} />
-                <span className="text-[10px] font-bold text-muted-foreground ml-1">Step {addStep} of 3</span>
+                <span className="text-[10px] font-bold text-muted-foreground ml-1">Step {addStep} of 2</span>
               </div>
             </div>
 
@@ -813,110 +739,8 @@ function ManageSources() {
               </div>
             )}
 
-            {/* STEP 2: ROUTING CONFIG */}
+            {/* STEP 2: CONNECTION INFO & FINISH */}
             {addStep === 2 && (
-              <div className="space-y-4">
-                <label className="text-xs font-bold text-muted-foreground uppercase block">Document Routing Rules</label>
-                <p className="text-xs text-muted-foreground mb-2">Define what document category is expected on this email channel and configure its domain mappings.</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-muted-foreground uppercase">Expected Doc Type</label>
-                    <select
-                      value={newDocType}
-                      onChange={(e) => setNewDocType(e.target.value)}
-                      className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-medium"
-                    >
-                      <option value="Vendor Invoice">Vendor Invoice</option>
-                      <option value="Sales Order">Sales Order</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-muted-foreground uppercase">Domain</label>
-                    <input
-                      value={newDomain}
-                      onChange={(e) => setNewDomain(e.target.value)}
-                      placeholder="e.g. mygoconsulting.com"
-                      className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-mono font-bold"
-                    />
-                  </div>
-                  {newDocType === "Vendor Invoice" ? (
-                    <>
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Name / ID</label>
-                        <div className="flex gap-2">
-                          <input
-                            value={newCustomerName}
-                            onChange={(e) => setNewCustomerName(e.target.value)}
-                            placeholder="e.g. C00003 or Apothekare"
-                            className="flex-1 h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleFetchWizardAddress}
-                            disabled={isFetchingWizardAddress}
-                            className="px-4 h-10 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50"
-                          >
-                            {isFetchingWizardAddress ? (
-                              <Activity className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Globe className="h-3.5 w-3.5" />
-                            )}
-                            Fetch Address
-                          </button>
-                        </div>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Customer Address (Sold to address)</label>
-                        <input
-                          value={newCustomerAddress}
-                          onChange={(e) => setNewCustomerAddress(e.target.value)}
-                          placeholder="Will be auto-filled or type manually"
-                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Sales Organization</label>
-                        <input
-                          value={newSalesOrg}
-                          onChange={(e) => setNewSalesOrg(e.target.value)}
-                          placeholder="e.g. 1010"
-                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Distribution Channel</label>
-                        <input
-                          value={newDistrChan}
-                          onChange={(e) => setNewDistrChan(e.target.value)}
-                          placeholder="e.g. 01"
-                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-bold"
-                        />
-                      </div>
-                    </>
-                  )}
-                </div>
-                <div className="flex justify-between items-center pt-2">
-                  <button
-                    onClick={() => setAddStep(1)}
-                    className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-muted-foreground hover:bg-muted"
-                  >
-                    Back
-                  </button>
-                  <button
-                    onClick={() => setAddStep(3)}
-                    className="px-5 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-bold hover:bg-primary/95 shadow-sm"
-                  >
-                    Continue
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* STEP 3: CONNECTION INFO & FINISH */}
-            {addStep === 3 && (
               <div className="space-y-4">
                 <label className="text-xs font-bold text-muted-foreground uppercase block">Connection Security details</label>
                 
@@ -956,7 +780,7 @@ function ManageSources() {
                     
                     <div className="flex justify-between items-center pt-2">
                       <button
-                        onClick={() => setAddStep(2)}
+                        onClick={() => setAddStep(1)}
                         className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-muted-foreground hover:bg-muted"
                       >
                         Back
@@ -976,12 +800,11 @@ function ManageSources() {
                         <Globe className="h-4 w-4" /> Secure Token-Based OAuth Redirection
                       </p>
                       <p>You will now be redirected to the secure Microsoft Account authentication landing page.</p>
-                      <p>Expected Document Type: <strong className="text-white">{newDocType}</strong> | Domain: <strong className="text-white">{newDomain || "None"}</strong> | Customer: <strong className="text-white">{newCustomerName || "None"}</strong></p>
                     </div>
                     
                     <div className="flex justify-between items-center pt-2">
                       <button
-                        onClick={() => setAddStep(2)}
+                        onClick={() => setAddStep(1)}
                         className="px-4 py-2 border border-border rounded-lg text-xs font-bold text-muted-foreground hover:bg-muted"
                       >
                         Back
@@ -1008,16 +831,16 @@ function ManageSources() {
           </div>
         )}
 
-        {/* Vendor Invoice Integration Channels */}
+        {/* Active Email Connections */}
         <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40 backdrop-blur-sm shadow-lg mb-6">
           <div className="p-4 border-b border-border bg-muted/20 flex items-center justify-between">
-            <span className="text-xs font-bold text-foreground">Vendor Invoice Integration Channels</span>
+            <span className="text-xs font-bold text-foreground">Active Email Connections</span>
             <span className="text-[10px] text-muted-foreground font-semibold">
-              {emails.filter(e => e.expected_doc_type !== "Sales Order").length} channels configured
+              {emails.length} channels configured
             </span>
           </div>
 
-          {emails.filter(e => e.expected_doc_type !== "Sales Order").length > 0 ? (
+          {emails.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left border-collapse">
                 <thead>
@@ -1025,13 +848,12 @@ function ManageSources() {
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Provider</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Customer Name</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Status</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
-                  {emails.filter(e => e.expected_doc_type !== "Sales Order").map((eConf) => (
+                  {emails.map((eConf) => (
                     <tr key={eConf.id} className="hover:bg-muted/10 transition-colors">
                       <td className="p-4">
                         <input
@@ -1057,15 +879,6 @@ function ManageSources() {
                             <Mail className="h-3 w-3" /> Gmail / IMAP
                           </span>
                         )}
-                      </td>
-                      <td className="p-4">
-                        <input
-                          value={eConf.customer_name || ""}
-                          onChange={(e) => handleFieldChange(eConf.id, "customer_name", e.target.value)}
-                          onBlur={handleBlurSave}
-                          placeholder="e.g. BP-CUST or C00003"
-                          className="w-full h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-xs shadow-inner font-bold"
-                        />
                       </td>
                       <td className="p-4">
                         {emailStatus[eConf.email] === "Pending" ? (
@@ -1109,113 +922,7 @@ function ManageSources() {
           ) : (
             <div className="p-8 text-center text-muted-foreground">
               <Mail className="h-8 w-8 mx-auto opacity-30 mb-2 text-primary" />
-              <p className="text-xs font-bold text-foreground">No active Vendor Invoice integration channels</p>
-            </div>
-          )}
-        </div>
-
-        {/* Sales Order Integration Channels */}
-        <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40 backdrop-blur-sm shadow-lg mb-6">
-          <div className="p-4 border-b border-border bg-muted/20 flex items-center justify-between">
-            <span className="text-xs font-bold text-foreground">Sales Order Integration Channels</span>
-            <span className="text-[10px] text-muted-foreground font-semibold">
-              {emails.filter(e => e.expected_doc_type === "Sales Order").length} channels configured
-            </span>
-          </div>
-
-          {emails.filter(e => e.expected_doc_type === "Sales Order").length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse">
-                <thead>
-                  <tr className="bg-muted/30 border-b border-border">
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Provider</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Customer Name</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Status</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-20">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/60">
-                  {emails.filter(e => e.expected_doc_type === "Sales Order").map((eConf) => (
-                    <tr key={eConf.id} className="hover:bg-muted/10 transition-colors">
-                      <td className="p-4">
-                        <input
-                          type="checkbox"
-                          checked={eConf.active !== false}
-                          onChange={() => handleToggleEmail(eConf.id)}
-                          className="rounded border-border cursor-pointer text-primary w-4 h-4 bg-background outline-none focus:ring-1 focus:ring-primary"
-                        />
-                      </td>
-                      <td className="p-4">
-                        <div className="font-bold text-foreground text-sm">{eConf.email}</div>
-                        <div className="text-[10px] text-muted-foreground font-mono mt-0.5">
-                          {eConf.provider === "Outlook" ? "Microsoft Graph Cloud Sync" : eConf.server}
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        {eConf.provider === "Outlook" ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-bold text-blue-400 shadow-sm">
-                            <Globe className="h-3 w-3" /> Outlook
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-400 shadow-sm">
-                            <Mail className="h-3 w-3" /> Gmail / IMAP
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-4">
-                        <input
-                          value={eConf.customer_name || ""}
-                          onChange={(e) => handleFieldChange(eConf.id, "customer_name", e.target.value)}
-                          onBlur={handleBlurSave}
-                          placeholder="e.g. BP-CUST or C00003"
-                          className="w-full h-8 px-2 rounded-lg bg-background border border-border outline-none focus:ring-1 focus:ring-primary text-xs shadow-inner font-bold"
-                        />
-                      </td>
-                      <td className="p-4">
-                        {emailStatus[eConf.email] === "Pending" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-bold text-amber-400">
-                            <Activity className="h-3 w-3 animate-spin" /> Verifying
-                          </span>
-                        ) : emailStatus[eConf.email] === "Connected" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-400">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-400">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> Disconnected
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          {eConf.provider !== "Outlook" && (
-                            <button
-                              onClick={() => handleTestEmail(eConf)}
-                              disabled={isTestingEmail[eConf.email]}
-                              className="px-2.5 py-1 text-[10px] font-bold text-primary border border-primary/20 hover:border-primary/50 bg-primary/5 hover:bg-primary/10 rounded-lg transition-all disabled:opacity-50"
-                            >
-                              Test
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleDeleteEmail(eConf.id)}
-                            className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-all"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="p-8 text-center text-muted-foreground">
-              <Mail className="h-8 w-8 mx-auto opacity-30 mb-2 text-primary" />
-              <p className="text-xs font-bold text-foreground">No active Sales Order integration channels</p>
+              <p className="text-xs font-bold text-foreground">No active email connections</p>
             </div>
           )}
         </div>
@@ -1914,12 +1621,31 @@ function Download({ className }: { className?: string }) {
   );
 }
 
+interface BPMapping {
+  email: string;
+  partnerName: string;
+  expected_doc_type: string;
+  customer_address?: string;
+  sales_org?: string;
+  distr_chan?: string;
+  division?: string;
+  company_code?: string;
+}
+
 function BusinessPartnerMappings() {
-  const [mappings, setMappings] = useState<{ email: string; partnerName: string }[]>([]);
+  const [mappings, setMappings] = useState<BPMapping[]>([]);
   const [newEmail, setNewEmail] = useState("");
   const [newPartnerName, setNewPartnerName] = useState("");
+  const [newDocType, setNewDocType] = useState("Sales Order");
+  const [newCustomerAddress, setNewCustomerAddress] = useState("");
+  const [newSalesOrg, setNewSalesOrg] = useState("1010");
+  const [newDistrChan, setNewDistrChan] = useState("01");
+  const [newDivision, setNewDivision] = useState("01");
+  const [newCompanyCode, setNewCompanyCode] = useState("1010");
+  
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isFetchingAddress, setIsFetchingAddress] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
@@ -1932,6 +1658,42 @@ function BusinessPartnerMappings() {
       .catch(() => toast.error("Failed to load mappings"))
       .finally(() => setIsLoading(false));
   }, []);
+
+  const handleFetchAddress = async () => {
+    if (!newPartnerName.trim()) {
+      toast.error("Please enter a Business Partner Name/ID first");
+      return;
+    }
+    setIsFetchingAddress(true);
+    try {
+      const res = await fetch(`${API_BASE}/sap/business-partner?query=${encodeURIComponent(newPartnerName.trim())}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to fetch Business Partner from SAP");
+      }
+      
+      const addrList = data.to_BusinessPartnerAddress?.results || data.to_BusinessPartnerAddress || [];
+      const addr = Array.isArray(addrList) ? addrList[0] : addrList;
+      if (!addr) {
+        toast.warning("No address record found in SAP for this Business Partner");
+        setNewCustomerAddress("No Address Record in SAP");
+        return;
+      }
+      const street = addr.StreetName || addr.Street || '';
+      const city = addr.CityName || addr.City || '';
+      const postal = addr.PostalCode || '';
+      const country = addr.Country || '';
+      const formattedAddr = [street, city, postal, country].filter(Boolean).join(', ');
+      
+      setNewCustomerAddress(formattedAddr || "No Address Record in SAP");
+      toast.success("Customer address successfully loaded from SAP!");
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || "Failed to fetch customer address from SAP");
+    } finally {
+      setIsFetchingAddress(false);
+    }
+  };
 
   const handleAddMapping = () => {
     if (!newEmail.trim() || !newPartnerName.trim()) {
@@ -1952,9 +1714,30 @@ function BusinessPartnerMappings() {
       return;
     }
 
-    setMappings([...mappings, { email: newEmail.trim().toLowerCase(), partnerName: newPartnerName.trim() }]);
+    const mappingObj: BPMapping = {
+      email: newEmail.trim().toLowerCase(),
+      partnerName: newPartnerName.trim(),
+      expected_doc_type: newDocType,
+    };
+
+    if (newDocType === "Sales Order") {
+      mappingObj.sales_org = newSalesOrg.trim() || "1010";
+      mappingObj.distr_chan = newDistrChan.trim() || "01";
+      mappingObj.division = newDivision.trim() || "01";
+      mappingObj.customer_address = newCustomerAddress.trim();
+    } else {
+      mappingObj.company_code = newCompanyCode.trim() || "1010";
+      mappingObj.customer_address = newCustomerAddress.trim();
+    }
+
+    setMappings([...mappings, mappingObj]);
     setNewEmail("");
     setNewPartnerName("");
+    setNewCustomerAddress("");
+    setNewSalesOrg("1010");
+    setNewDistrChan("01");
+    setNewDivision("01");
+    setNewCompanyCode("1010");
     toast.success("Mapping added to draft list");
   };
 
@@ -1989,13 +1772,13 @@ function BusinessPartnerMappings() {
       <div>
         <h2 className="text-lg font-bold text-foreground">Business Partner Mappings</h2>
         <p className="text-xs text-muted-foreground mt-1">
-          Map incoming email sender addresses directly to SAP Business Partners. If an email is received from a mapped address, its Business Partner name will automatically be assigned to the mapped value rather than the one extracted by the AI model.
+          Map incoming email sender addresses directly to SAP Business Partners and configure default document routing, Sales Area parameters, or Company Codes.
         </p>
       </div>
 
       <div className="fiori-card p-5 space-y-4">
         <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Add New Mapping</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           <div className="space-y-1">
             <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Email ID</label>
             <input
@@ -2003,24 +1786,110 @@ function BusinessPartnerMappings() {
               placeholder="supplier@example.com"
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
-              className="w-full h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20"
+              className="w-full h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20 font-medium"
             />
           </div>
           <div className="space-y-1">
-            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Business Partner Name</label>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Expected Doc Type</label>
+            <select
+              value={newDocType}
+              onChange={(e) => setNewDocType(e.target.value)}
+              className="w-full h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20 font-medium"
+            >
+              <option value="Sales Order">Sales Order</option>
+              <option value="Vendor Invoice">Vendor Invoice</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Business Partner Name / ID</label>
             <input
               type="text"
-              placeholder="e.g. Albyco Belgium"
+              placeholder="e.g. C00003 or Albyco Belgium"
               value={newPartnerName}
               onChange={(e) => setNewPartnerName(e.target.value)}
-              className="w-full h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20"
+              className="w-full h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20 font-medium"
             />
           </div>
         </div>
-        <div className="flex justify-end">
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+          <div className="space-y-1 sm:col-span-2">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Customer Address</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Will be auto-filled or type manually"
+                value={newCustomerAddress}
+                onChange={(e) => setNewCustomerAddress(e.target.value)}
+                className="flex-1 h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20 font-medium"
+              />
+              <button
+                type="button"
+                onClick={handleFetchAddress}
+                disabled={isFetchingAddress}
+                className="px-3 h-8 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-bold transition-all flex items-center gap-1 shrink-0 disabled:opacity-50"
+              >
+                {isFetchingAddress ? (
+                  <Activity className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Globe className="h-3.5 w-3.5" />
+                )}
+                Fetch Address
+              </button>
+            </div>
+          </div>
+
+          {newDocType === "Sales Order" ? (
+            <div className="grid grid-cols-3 gap-2">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Sales Org</label>
+                <input
+                  type="text"
+                  placeholder="1010"
+                  value={newSalesOrg}
+                  onChange={(e) => setNewSalesOrg(e.target.value)}
+                  className="w-full h-8 px-2 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20 font-bold text-center"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Dist. Chan</label>
+                <input
+                  type="text"
+                  placeholder="01"
+                  value={newDistrChan}
+                  onChange={(e) => setNewDistrChan(e.target.value)}
+                  className="w-full h-8 px-2 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20 font-bold text-center"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Division</label>
+                <input
+                  type="text"
+                  placeholder="01"
+                  value={newDivision}
+                  onChange={(e) => setNewDivision(e.target.value)}
+                  className="w-full h-8 px-2 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20 font-bold text-center"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Company Code</label>
+              <input
+                type="text"
+                placeholder="1010"
+                value={newCompanyCode}
+                onChange={(e) => setNewCompanyCode(e.target.value)}
+                className="w-full h-8 px-3 text-xs border border-border rounded bg-card focus:outline-none focus:ring-1 focus:ring-primary/20 font-bold"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end pt-2">
           <button
             onClick={handleAddMapping}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow-md transition-all active:scale-95"
+            className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-primary text-primary-foreground rounded hover:shadow-md transition-all active:scale-95"
           >
             <Plus className="h-3.5 w-3.5" /> Add Mapping
           </button>
@@ -2039,7 +1908,10 @@ function BusinessPartnerMappings() {
               <thead>
                 <tr>
                   <th className="text-left">Email ID</th>
+                  <th className="text-left w-28">Doc Type</th>
                   <th className="text-left">Business Partner Name</th>
+                  <th className="text-left w-36">Sales Area / Co.Code</th>
+                  <th className="text-left">Address</th>
                   <th className="w-12 text-center">Action</th>
                 </tr>
               </thead>
@@ -2047,7 +1919,32 @@ function BusinessPartnerMappings() {
                 {mappings.map((m, index) => (
                   <tr key={index} className="hover:bg-muted/10">
                     <td className="font-mono text-xs font-medium text-foreground">{m.email}</td>
-                    <td className="text-xs font-medium text-primary">{m.partnerName}</td>
+                    <td>
+                      {m.expected_doc_type === "Sales Order" ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-400">
+                          Sales Order
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-bold text-indigo-400">
+                          Vendor Invoice
+                        </span>
+                      )}
+                    </td>
+                    <td className="text-xs font-bold text-primary">{m.partnerName}</td>
+                    <td className="text-xs font-mono">
+                      {m.expected_doc_type === "Sales Order" ? (
+                        <span className="text-muted-foreground">
+                          Org: <strong className="text-foreground">{m.sales_org || "1010"}</strong> | Chan: <strong className="text-foreground">{m.distr_chan || "01"}</strong> | Div: <strong className="text-foreground">{m.division || "01"}</strong>
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          CoCode: <strong className="text-foreground">{m.company_code || "1010"}</strong>
+                        </span>
+                      )}
+                    </td>
+                    <td className="text-xs text-muted-foreground max-w-xs truncate" title={m.customer_address}>
+                      {m.customer_address || "—"}
+                    </td>
                     <td className="text-center">
                       <button
                         onClick={() => handleDeleteMapping(index)}
@@ -2061,7 +1958,7 @@ function BusinessPartnerMappings() {
                 ))}
                 {mappings.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="text-center py-8 text-muted-foreground text-xs">
+                    <td colSpan={6} className="text-center py-8 text-muted-foreground text-xs">
                       No active mappings defined. Add one above.
                     </td>
                   </tr>
@@ -2212,6 +2109,141 @@ function PriceDeterminationSettings() {
         >
           <Save className="h-4 w-4" />
           {isSaving ? "Saving Settings..." : "Save pricing configuration"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SalesOrderContextSettings() {
+  const [defaultOrderType, setDefaultOrderType] = useState("OR1");
+  const [defaultOrderBlock, setDefaultOrderBlock] = useState("");
+  const [pricingCondition, setPricingCondition] = useState("PR00");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.sales_order_default_type !== undefined) {
+          setDefaultOrderType(data.sales_order_default_type);
+        }
+        if (data.sales_order_default_block !== undefined) {
+          setDefaultOrderBlock(data.sales_order_default_block);
+        }
+        if (data.sales_order_pricing_condition !== undefined) {
+          setPricingCondition(data.sales_order_pricing_condition);
+        }
+      })
+      .catch(() => {
+        toast.error("Failed to load Sales Order settings");
+      });
+  }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/sales-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sales_order_default_type: defaultOrderType,
+          sales_order_default_block: defaultOrderBlock,
+          sales_order_pricing_condition: pricingCondition,
+        }),
+      });
+      if (res.ok) {
+        toast.success("Sales Order settings saved successfully");
+      } else {
+        throw new Error("Save failed");
+      }
+    } catch (err: any) {
+      toast.error("Failed to save Sales Order settings");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div>
+        <h2 className="text-2xl font-bold mb-1">Sales Order Context Settings</h2>
+        <p className="text-muted-foreground text-sm font-medium">
+          Configure default types, blocks, and pricing conditions for SAP S/4HANA Sales Order creation
+        </p>
+      </div>
+
+      <div className="bg-card border border-border rounded-xl p-6 space-y-6 shadow-sm">
+        {/* Default Order Type */}
+        <div className="space-y-2">
+          <label className="text-xs font-bold uppercase tracking-wider text-primary block">
+            Default Order Type
+          </label>
+          <div className="relative max-w-sm">
+            <input
+              type="text"
+              placeholder="e.g. OR1"
+              value={defaultOrderType}
+              onChange={(e) => setDefaultOrderType(e.target.value)}
+              className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
+            The document type used when creating Sales Orders in SAP (default is <code className="bg-muted px-1 py-0.5 rounded">OR1</code>).
+          </p>
+        </div>
+
+        <hr className="border-border/60" />
+
+        {/* Default Order Block */}
+        <div className="space-y-2">
+          <label className="text-xs font-bold uppercase tracking-wider text-primary block">
+            Default Order Block (Billing/Delivery Block)
+          </label>
+          <div className="relative max-w-sm">
+            <input
+              type="text"
+              placeholder="e.g. 01 (leave blank for none)"
+              value={defaultOrderBlock}
+              onChange={(e) => setDefaultOrderBlock(e.target.value)}
+              className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
+            If configured, this block code will be populated as the delivery and billing block reason at the Sales Order header to prevent automatic processing.
+          </p>
+        </div>
+
+        <hr className="border-border/60" />
+
+        {/* Pricing Condition for Gross Price */}
+        <div className="space-y-2">
+          <label className="text-xs font-bold uppercase tracking-wider text-primary block">
+            Pricing Condition for Gross Price
+          </label>
+          <div className="relative max-w-sm">
+            <input
+              type="text"
+              placeholder="e.g. PPR0 or PR00"
+              value={pricingCondition}
+              onChange={(e) => setPricingCondition(e.target.value)}
+              className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
+            The condition type (e.g. <code className="bg-muted px-1 py-0.5 rounded">PPR0</code> or <code className="bg-muted px-1 py-0.5 rounded">PR00</code>) used when passing line-item unit prices nested under <code className="bg-muted px-1 py-0.5 rounded">to_PricingElement</code> in the Sales Order payload.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-3">
+        <button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex items-center gap-1.5 px-5 py-2.5 bg-primary text-primary-foreground text-xs font-bold rounded-xl hover:shadow-md transition-all active:scale-95 disabled:opacity-50"
+        >
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving Settings..." : "Save Sales Order configuration"}
         </button>
       </div>
     </div>
