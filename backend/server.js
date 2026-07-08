@@ -2830,7 +2830,7 @@ function buildSAPPayload(docData, settings) {
                     itemPayload.ProductionPlant = item.plant || docData.header?.plant;
                 }
                 itemPayload.SalesOrderItem = item.item_number || String((index + 1) * 10);
-                itemPayload.MaterialByCustomer = "ARFL100AM";
+                itemPayload.MaterialByCustomer = item.sap_material_number || item.customer_material_number || item.supplier_material_number || "";
                 itemPayload.RequestedQuantity = "1";
                 itemPayload.RequestedQuantityUnit = "EA";
             } else {
@@ -2852,10 +2852,10 @@ function buildSAPPayload(docData, settings) {
                             val = item.sap_material_number || item.customer_material_number || item.supplier_material_number || "";
                         }
                         if (!val && item.material_description) {
-                            val = extractMaterial(item.material_description, "ARFL100AM");
+                            val = extractMaterial(item.material_description, "");
                         }
                         if (!val) {
-                            val = "ARFL100AM";
+                            val = "";
                         }
                     }
                     if (m.targetField === 'RequestedQuantity' || m.targetField === 'Quantity') {
@@ -2920,8 +2920,7 @@ function buildSAPPayload(docData, settings) {
         const lineItems = (docData.line_items || []).map((item, index) => {
             const itemNum = item.item_number || String((index + 1) * 10);
             const qty = String(Math.round(parseFloat(item.quantity) || 1));
-            const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
-            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, defaultMat);
+            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, "");
             const uom = item.unit_of_measure || "EA";
 
             const itemPayload = {
@@ -2955,32 +2954,7 @@ function buildSAPPayload(docData, settings) {
             return itemPayload;
         });
 
-        if (lineItems.length === 0) {
-            const defaultUom = "EA";
-            const fallbackItem = {
-                SalesOrderItem: "10",
-                MaterialByCustomer: "ARFL100AM",
-                RequestedQuantity: "2",
-                RequestedQuantityUnit: defaultUom,
-                ProductionPlant: "1010"
-            };
-
-            const pricingConditionType = settings.sales_order_pricing_condition;
-            if (pricingConditionType) {
-                const conditionCurrency = docData.totals?.currency || "USD";
-                fallbackItem.to_PricingElement = [
-                    {
-                        ConditionType: pricingConditionType,
-                        ConditionRateValue: "100.00",
-                        ConditionCurrency: conditionCurrency,
-                        ConditionQuantity: "1",
-                        ConditionQuantityUnit: defaultUom
-                    }
-                ];
-            }
-
-            lineItems.push(fallbackItem);
-        }
+        // No fallback fake items injected
 
         let btpSoldTo = soldToParty;
         if (btpSoldTo.length > 10) {
@@ -3017,10 +2991,8 @@ function buildSAPPayload(docData, settings) {
             const itemNum = item.item_number || String((index + 1) * 10);
             const qty = String(Math.round(parseFloat(item.quantity) || 1));
             const price = String(Math.round(parseFloat(item.price || item.unit_price) || 0));
-            const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
-            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, defaultMat);
+            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, "");
             const uom = item.unit_of_measure || "EA";
-
             return {
                 Doc_typ: settings.sales_order_default_type || "OR1",
                 Item_num: itemNum,
@@ -3294,7 +3266,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
                     if (match) sapDocNumber = match[1];
                 }
                 if (!sapDocNumber) {
-                    sapDocNumber = `90000${Math.floor(100000 + Math.random() * 900000)}`;
+                    sapDocNumber = '';
                 }
 
                 docData.status = 'success';
@@ -3327,23 +3299,14 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
                 });
             } else {
                 console.warn(`⚠️ [BTP] Post request returned error: (Status ${btpPostResp.status}) - ${btpText}`);
-                
-                // BTP CAP endpoint on SAP Gateway is planned/mocked, but credentials and format are fully verified.
-                // We treat this as a simulated success to prevent the push from failing.
-                const sapDocNumber = `90000${Math.floor(100000 + Math.random() * 900000)}`;
-                docData.status = 'success';
-                docData.sap_document_number = sapDocNumber;
-                docData.sap_payload = payload;
-                docData.sap_attachment_status = 'success';
-
+                docData.status = 'failed';
+                docData.sap_error = `BTP CAP API Error: Status ${btpPostResp.status} - ${btpText}`;
                 await storageService.saveFile('sap_json', `${id}.json`, docData, true);
 
-                return res.json({
-                    success: true,
-                    message: 'Sales Order posted to SAP BTP successfully! (Simulated success for planned/mocked BTP endpoint on Gateway)',
-                    data: btpText || JSON.stringify({ message: "Mocked success for planned endpoint" }),
-                    sap_document_number: sapDocNumber,
-                    sap_attachment_status: docData.sap_attachment_status
+                return res.status(btpPostResp.status).json({
+                    success: false,
+                    error: `SAP BTP CAP API returned Status ${btpPostResp.status}`,
+                    details: btpText
                 });
             }
         }
