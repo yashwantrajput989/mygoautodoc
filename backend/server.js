@@ -4462,48 +4462,6 @@ function cleanAndValidatePrice(priceStr) {
 }
 
 
-async function getTokenUsage() {
-    try {
-        if (!fs.existsSync(TOKEN_USAGE_PATH)) {
-            return [];
-        }
-        const data = fs.readFileSync(TOKEN_USAGE_PATH, 'utf8');
-        return JSON.parse(data);
-    } catch (err) {
-        console.error('Error reading token_usage.json:', err);
-        return [];
-    }
-}
-
-async function logTokenUsage(docName, model, promptTokens, completionTokens, totalTokens) {
-    try {
-        let logs = [];
-        if (fs.existsSync(TOKEN_USAGE_PATH)) {
-            const raw = fs.readFileSync(TOKEN_USAGE_PATH, 'utf8');
-            try {
-                logs = JSON.parse(raw);
-            } catch {
-                logs = [];
-            }
-        }
-        const newEntry = {
-            id: Date.now(),
-            docName,
-            timestamp: new Date().toISOString(),
-            model,
-            promptTokens: promptTokens || 0,
-            completionTokens: completionTokens || 0,
-            totalTokens: totalTokens || 0
-        };
-        logs.unshift(newEntry);
-        const limited = logs.slice(0, 100);
-        fs.writeFileSync(TOKEN_USAGE_PATH, JSON.stringify(limited, null, 4));
-        console.log(`📊 [AI Token Log] Saved token usage for ${docName}: Input=${promptTokens}, Output=${completionTokens}, Total=${totalTokens}`);
-    } catch (err) {
-        console.error('Error logging token usage:', err);
-    }
-}
-
 // Helper to extract text from a file buffer
 async function extractTextFromFile(fileData, ext) {
     const supportedImages = ['.png', '.jpg', '.jpeg', '.webp', '.tiff'];
