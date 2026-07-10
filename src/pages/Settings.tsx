@@ -28,6 +28,7 @@ import {
   RefreshCw,
   ShoppingCart,
   Sliders,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -2503,3 +2504,199 @@ function TokenUsageLogs() {
   );
 }
 
+function PriceDeterminationSettings() {
+  const [form, setForm] = useState({
+    customer_requested_price: "",
+    calculate_price_formula: true,
+    price_formula_type: "amount_times_qty",
+  });
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings`)
+      .then((res) => res.json())
+      .then((data) => {
+        setForm({
+          customer_requested_price: data.customer_requested_price || "",
+          calculate_price_formula: data.calculate_price_formula !== false,
+          price_formula_type: data.price_formula_type || "amount_times_qty",
+        });
+      })
+      .catch(() => toast.error("Failed to load pricing settings"));
+  }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/pricing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (res.ok) {
+        toast.success("Pricing settings saved successfully");
+      } else {
+        toast.error("Failed to save pricing settings");
+      }
+    } catch {
+      toast.error("Error saving pricing settings");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div>
+        <h2 className="text-2xl font-bold mb-1">Price Determination</h2>
+        <p className="text-muted-foreground text-sm font-medium">
+          Configure how prices are calculated and resolved from extracted document data.
+        </p>
+      </div>
+
+      <div className="space-y-6 p-6 rounded-2xl border border-border bg-card shadow-sm">
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block">
+            Customer Requested Price Override
+          </label>
+          <input
+            type="number"
+            value={form.customer_requested_price}
+            onChange={(e) => setForm({ ...form, customer_requested_price: e.target.value })}
+            placeholder="e.g. 150.00 — leave blank to use document value"
+            className="w-full bg-background/50 border border-border h-11 px-4 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
+          />
+          <p className="text-xs text-muted-foreground">If set, this price overrides the document-extracted price for all sales orders.</p>
+        </div>
+
+        <div className="flex items-center gap-3 p-4 rounded-xl border border-border bg-muted/20">
+          <input
+            type="checkbox"
+            id="calc_formula"
+            checked={form.calculate_price_formula}
+            onChange={(e) => setForm({ ...form, calculate_price_formula: e.target.checked })}
+            className="w-4 h-4 rounded text-primary focus:ring-primary cursor-pointer"
+          />
+          <label htmlFor="calc_formula" className="text-sm font-medium cursor-pointer">
+            Calculate Price Using Formula
+          </label>
+        </div>
+
+        {form.calculate_price_formula && (
+          <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
+            <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block">
+              Price Formula Type
+            </label>
+            <select
+              value={form.price_formula_type}
+              onChange={(e) => setForm({ ...form, price_formula_type: e.target.value })}
+              className="bg-background border border-border h-10 px-3 rounded-md text-sm focus:ring-1 focus:ring-primary outline-none transition-all text-foreground font-medium"
+            >
+              <option value="amount_times_qty">Amount × Quantity</option>
+              <option value="unit_price">Unit Price Only</option>
+              <option value="total_amount">Total Amount Only</option>
+            </select>
+          </div>
+        )}
+
+        <button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground text-sm font-bold rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-all"
+        >
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving..." : "Save Pricing Settings"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SalesOrderContextSettings() {
+  const [form, setForm] = useState({
+    sales_order_default_type: "OR1",
+    sales_order_default_block: "",
+    sales_order_pricing_condition: "PR00",
+    sales_order_payment_terms: "0003",
+  });
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings`)
+      .then((res) => res.json())
+      .then((data) => {
+        setForm({
+          sales_order_default_type: data.sales_order_default_type || "OR1",
+          sales_order_default_block: data.sales_order_default_block || "",
+          sales_order_pricing_condition: data.sales_order_pricing_condition || "PR00",
+          sales_order_payment_terms: data.sales_order_payment_terms || "0003",
+        });
+      })
+      .catch(() => toast.error("Failed to load sales order settings"));
+  }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/sales-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (res.ok) {
+        toast.success("Sales Order settings saved successfully");
+      } else {
+        toast.error("Failed to save Sales Order settings");
+      }
+    } catch {
+      toast.error("Error saving Sales Order settings");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const fields = [
+    { key: "sales_order_default_type", label: "Default Order Type", placeholder: "e.g. OR1", hint: "SAP order type used when creating sales orders (e.g. OR, OR1, TA)." },
+    { key: "sales_order_default_block", label: "Default Delivery Block", placeholder: "e.g. 01 — leave blank for none", hint: "Optional SAP delivery block code applied to new orders." },
+    { key: "sales_order_pricing_condition", label: "Pricing Condition Key", placeholder: "e.g. PR00", hint: "SAP condition type used for the main price in the sales order (e.g. PR00, PB00)." },
+    { key: "sales_order_payment_terms", label: "Default Payment Terms", placeholder: "e.g. 0003", hint: "SAP payment terms key applied to new sales orders (e.g. 0001, 0003, ZB14)." },
+  ] as const;
+
+  return (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div>
+        <h2 className="text-2xl font-bold mb-1">Sales Order Context</h2>
+        <p className="text-muted-foreground text-sm font-medium">
+          Define SAP defaults that are applied when creating sales orders from extracted documents.
+        </p>
+      </div>
+
+      <div className="space-y-6 p-6 rounded-2xl border border-border bg-card shadow-sm">
+        {fields.map(({ key, label, placeholder, hint }) => (
+          <div key={key} className="space-y-1.5">
+            <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block">
+              {label}
+            </label>
+            <input
+              type="text"
+              value={form[key]}
+              onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+              placeholder={placeholder}
+              className="w-full bg-background/50 border border-border h-11 px-4 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
+            />
+            <p className="text-xs text-muted-foreground">{hint}</p>
+          </div>
+        ))}
+
+        <button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground text-sm font-bold rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-all"
+        >
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving..." : "Save Sales Order Settings"}
+        </button>
+      </div>
+    </div>
+  );
+}
