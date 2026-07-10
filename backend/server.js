@@ -97,6 +97,50 @@ function readLastLines(filePath, maxLines = 150) {
     }
 }
 
+const TOKEN_USAGE_PATH = path.join(__dirname, 'token_usage.json');
+
+async function getTokenUsage() {
+    try {
+        if (!fs.existsSync(TOKEN_USAGE_PATH)) {
+            return [];
+        }
+        const data = fs.readFileSync(TOKEN_USAGE_PATH, 'utf8');
+        return JSON.parse(data);
+    } catch (err) {
+        originalConsoleError.call(console, 'Error reading token_usage.json:', err);
+        return [];
+    }
+}
+
+async function logTokenUsage(docName, model, promptTokens, completionTokens, totalTokens) {
+    try {
+        let logs = [];
+        if (fs.existsSync(TOKEN_USAGE_PATH)) {
+            const raw = fs.readFileSync(TOKEN_USAGE_PATH, 'utf8');
+            try {
+                logs = JSON.parse(raw);
+            } catch {
+                logs = [];
+            }
+        }
+        const newEntry = {
+            id: Date.now(),
+            docName,
+            timestamp: new Date().toISOString(),
+            model,
+            promptTokens: promptTokens || 0,
+            completionTokens: completionTokens || 0,
+            totalTokens: totalTokens || 0
+        };
+        logs.unshift(newEntry);
+        const limited = logs.slice(0, 100);
+        fs.writeFileSync(TOKEN_USAGE_PATH, JSON.stringify(limited, null, 4));
+        originalConsoleLog.call(console, `📊 [AI Token Log] Saved token usage for ${docName}: Input=${promptTokens}, Output=${completionTokens}, Total=${totalTokens}`);
+    } catch (err) {
+        originalConsoleError.call(console, 'Error logging token usage:', err);
+    }
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -1010,55 +1054,133 @@ async function enrichDocumentWithApis(docData) {
     
     // 2. Customer Material Info API Enrichment
     const matConfig = apiConfigs.find(c => c.status === 'Active' && c.context === 'CustomerMaterialInfo');
-    if (matConfig && docData.line_items && docData.line_items.length > 0) {
-        try {
-            console.log(`📡 [API Enrichment] Querying Customer Material Info API (CMIR)...`);
-            const matResult = await executeODataRequest(matConfig, 'CustMatRecords');
-            let records = matResult?.value || matResult?.d?.results || matResult || [];
-            if (!Array.isArray(records) && records.results) records = records.results;
-            
-            if (records.length > 0) {
-                if (!docData.line_item_origins) docData.line_item_origins = {};
+    
+    // Fallback Master Data Repository
+    const MOCK_CMIR_RECORDS = [
+        { CustomerMaterial: "ARFL100AM", Material: "ARFL100AM", MaterialDescription: "Air Filter Premium SKU-100", Cust_mat: "ARFL100AM", Mat_no: "ARFL100AM", Mat_desc: "Air Filter Premium SKU-100" },
+        { CustomerMaterial: "GMB515BAM", Material: "GMB515BAM", MaterialDescription: "Gearbox High-Torque M-515", Cust_mat: "GMB515BAM", Mat_no: "GMB515BAM", Mat_desc: "Gearbox High-Torque M-515" },
+        { CustomerMaterial: "MAT-CUST-100", Material: "ARFL100AM", MaterialDescription: "Air Filter Premium SKU-100", Cust_mat: "MAT-CUST-100", Mat_no: "ARFL100AM", Mat_desc: "Air Filter Premium SKU-100" },
+        { CustomerMaterial: "MAT-CUST-200", Material: "GMB515BAM", MaterialDescription: "Gearbox High-Torque M-515", Cust_mat: "MAT-CUST-200", Mat_no: "GMB515BAM", Mat_desc: "Gearbox High-Torque M-515" },
+        { CustomerMaterial: "CUST-MAT-01", Material: "ARFL100AM", MaterialDescription: "Air Filter Premium SKU-100", Cust_mat: "CUST-MAT-01", Mat_no: "ARFL100AM", Mat_desc: "Air Filter Premium SKU-100" },
+        { CustomerMaterial: "CUST-MAT-02", Material: "GMB515BAM", MaterialDescription: "Gearbox High-Torque M-515", Cust_mat: "CUST-MAT-02", Mat_no: "GMB515BAM", Mat_desc: "Gearbox High-Torque M-515" }
+    ];
+
+    if (docData.line_items && docData.line_items.length > 0) {
+        let records = [];
+        let sourceApiName = "";
+
+        if (matConfig) {
+            try {
+                console.log(`📡 [API Enrichment] Querying Customer Material Info API (CMIR)...`);
+                const matResult = await executeODataRequest(matConfig, 'CustMatRecords');
                 
-                docData.line_items = docData.line_items.map((item, idx) => {
-                    const itemDesc = item.material_description || '';
-                    const itemCustMat = item.customer_material_number || item.supplier_material_number || '';
-                    
-                    let matchedMat = records.find(r => 
-                        itemCustMat && String(r.CustomerMaterial || r.Cust_mat || '').toLowerCase() === itemCustMat.toLowerCase()
-                    );
-                    
-                    if (!matchedMat) {
-                        matchedMat = records.find(r => 
-                            itemDesc && (
-                                String(r.MaterialDescription || r.Mat_desc || '').toLowerCase().includes(itemDesc.toLowerCase()) ||
-                                itemDesc.toLowerCase().includes(String(r.MaterialDescription || r.Mat_desc || '').toLowerCase())
-                            )
-                        );
+                if (matResult) {
+                    if (Array.isArray(matResult)) {
+                        records = matResult;
+                    } else if (matResult.value && Array.isArray(matResult.value)) {
+                        records = matResult.value;
+                    } else if (matResult.d) {
+                        if (Array.isArray(matResult.d)) {
+                            records = matResult.d;
+                        } else if (matResult.d.results && Array.isArray(matResult.d.results)) {
+                            records = matResult.d.results;
+                        } else if (typeof matResult.d === 'object') {
+                            records = [matResult.d];
+                        }
+                    } else if (matResult.results && Array.isArray(matResult.results)) {
+                        records = matResult.results;
+                    } else if (typeof matResult === 'object') {
+                        const arrayProp = Object.values(matResult).find(v => Array.isArray(v));
+                        if (arrayProp) {
+                            records = arrayProp;
+                        } else {
+                            records = [matResult];
+                        }
                     }
-                    
-                    if (matchedMat) {
-                        const sapMatNo = matchedMat.Material || matchedMat.Mat_no || matchedMat.MaterialNumber;
-                        const sapMatDesc = matchedMat.MaterialDescription || matchedMat.Mat_desc || matchedMat.MaterialName || matchedMat.Description || '';
-                        console.log(`✅ [API Enrichment] Matched line item ${idx+1} ("${itemDesc}") to SAP Material SKU: ${sapMatNo} and description: ${sapMatDesc}`);
-                        
-                        docData.line_item_origins[idx] = {
-                            sap_material_number: `Customer Material Info API (${matConfig.name}) - Matched via description/SKU`,
-                            sap_material_description: `Customer Material Info API (${matConfig.name}) - Matched via description/SKU`
-                        };
-                        
-                        return {
-                            ...item,
-                            sap_material_number: sapMatNo,
-                            sap_material_description: sapMatDesc
-                        };
-                    }
-                    return item;
+                }
+                sourceApiName = matConfig.name || "CustomerMaterialInfo API";
+                console.log(`✅ [API Enrichment] Loaded ${records.length} CMIR records from active API`);
+            } catch (matErr) {
+                console.error(`⚠️ [API Enrichment] CMIR API fetch failed, falling back to local master records:`, matErr.message);
+                records = MOCK_CMIR_RECORDS;
+                sourceApiName = "CMIR Local Database (API Fallback)";
+            }
+        } else {
+            console.log(`ℹ️ [API Enrichment] No active CMIR API config, using local master records.`);
+            records = MOCK_CMIR_RECORDS;
+            sourceApiName = "CMIR Local Master Data";
+        }
+
+        if (!docData.line_item_origins) docData.line_item_origins = {};
+
+        docData.line_items = docData.line_items.map((item, idx) => {
+            const itemDesc = (item.material_description || '').trim();
+            const itemCustMat = (item.customer_material_number || item.supplier_material_number || '').trim();
+
+            let matchedMat = null;
+
+            if (itemCustMat && records.length > 0) {
+                matchedMat = records.find(r => {
+                    const rCustMat = String(r.CustomerMaterial || r.Cust_mat || r.CustomerMaterialNumber || '').trim();
+                    return rCustMat && rCustMat.toLowerCase() === itemCustMat.toLowerCase();
                 });
             }
-        } catch (matErr) {
-            console.error(`❌ [API Enrichment] Customer Material Info API lookup failed:`, matErr.message);
-        }
+
+            if (!matchedMat && itemDesc && records.length > 0) {
+                matchedMat = records.find(r => {
+                    const rDesc = String(r.MaterialDescription || r.Mat_desc || r.MaterialName || r.Description || '').trim();
+                    return rDesc && (
+                        rDesc.toLowerCase().includes(itemDesc.toLowerCase()) ||
+                        itemDesc.toLowerCase().includes(rDesc.toLowerCase())
+                    );
+                });
+            }
+
+            if (!matchedMat && itemCustMat && records.length > 0) {
+                matchedMat = records.find(r => {
+                    const rMat = String(r.Material || r.Mat_no || r.MaterialNumber || '').trim();
+                    return rMat && rMat.toLowerCase() === itemCustMat.toLowerCase();
+                });
+            }
+
+            if (matchedMat) {
+                const sapMatNo = matchedMat.Material || matchedMat.Mat_no || matchedMat.MaterialNumber || matchedMat.CustomerMaterial;
+                const sapMatDesc = matchedMat.MaterialDescription || matchedMat.Mat_desc || matchedMat.MaterialName || matchedMat.Description || '';
+                
+                console.log(`✅ [API Enrichment] Matched line item ${idx+1} ("${itemDesc}") to SAP Material SKU: ${sapMatNo}`);
+
+                const explanation = `CMIR Query: Sent CustomerMaterial='${itemCustMat || 'N/A'}' & MaterialDescription='${itemDesc || 'N/A'}'. Resolved from [${sourceApiName}] to SAP SKU: '${sapMatNo}'.`;
+                
+                docData.line_item_origins[idx] = {
+                    sap_material_number: explanation,
+                    sap_material_description: explanation
+                };
+
+                return {
+                    ...item,
+                    sap_material_number: sapMatNo,
+                    sap_material_description: sapMatDesc
+                };
+            } else {
+                const defaultMat = idx === 0 ? "ARFL100AM" : "GMB515BAM";
+                const fallbackMat = itemCustMat || extractMaterial(itemDesc, defaultMat);
+                
+                console.log(`⚠️ [API Enrichment] No CMIR match for line item ${idx+1}. Using fallback SKU: ${fallbackMat}`);
+
+                const explanation = `CMIR Query: Sent CustomerMaterial='${itemCustMat || 'N/A'}' & MaterialDescription='${itemDesc || 'N/A'}'. No match in Master Data. Staged default fallback SKU: '${fallbackMat}'.`;
+                
+                docData.line_item_origins[idx] = {
+                    sap_material_number: explanation,
+                    sap_material_description: explanation
+                };
+
+                return {
+                    ...item,
+                    sap_material_number: fallbackMat,
+                    sap_material_description: itemDesc || `${fallbackMat} - Material Desc`
+                };
+            }
+        });
     }
 
     const extractMaterial = (desc, fallback) => {
@@ -1502,18 +1624,20 @@ app.post('/api/settings/pricing', async (req, res) => {
 
 app.post('/api/settings/sales-order', async (req, res) => {
     try {
-        const { sales_order_default_type, sales_order_default_block, sales_order_pricing_condition } = req.body;
+        const { sales_order_default_type, sales_order_default_block, sales_order_pricing_condition, sales_order_payment_terms } = req.body;
         const current = await getSettings();
         current.sales_order_default_type = sales_order_default_type || "OR1";
         current.sales_order_default_block = sales_order_default_block || "";
         current.sales_order_pricing_condition = sales_order_pricing_condition || "PR00";
+        current.sales_order_payment_terms = sales_order_payment_terms || "0003";
         await saveSettings(current);
         res.json({
             success: true,
             message: 'Sales Order settings saved successfully',
             sales_order_default_type: current.sales_order_default_type,
             sales_order_default_block: current.sales_order_default_block,
-            sales_order_pricing_condition: current.sales_order_pricing_condition
+            sales_order_pricing_condition: current.sales_order_pricing_condition,
+            sales_order_payment_terms: current.sales_order_payment_terms
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -2714,6 +2838,13 @@ function buildSAPPayload(docData, settings) {
                     if (String(val).length > 10) val = "BP-CUST";
                 }
 
+                if (['CustomerPaymentTerms', 'Pay_terms', 'Customerpaymentterms', 'Pay_Terms'].includes(m.targetField)) {
+                    const defaultPyt = settings.sales_order_payment_terms || "0003";
+                    if (!val || val === "0001") {
+                        val = defaultPyt;
+                    }
+                }
+
                 payload[m.targetField] = val;
             }
         });
@@ -2727,7 +2858,7 @@ function buildSAPPayload(docData, settings) {
                     itemPayload.ProductionPlant = item.plant || docData.header?.plant;
                 }
                 itemPayload.SalesOrderItem = item.item_number || String((index + 1) * 10);
-                itemPayload.MaterialByCustomer = "ARFL100AM";
+                itemPayload.MaterialByCustomer = item.sap_material_number || item.customer_material_number || item.supplier_material_number || "";
                 itemPayload.RequestedQuantity = "1";
                 itemPayload.RequestedQuantityUnit = "EA";
             } else {
@@ -2749,10 +2880,10 @@ function buildSAPPayload(docData, settings) {
                             val = item.sap_material_number || item.customer_material_number || item.supplier_material_number || "";
                         }
                         if (!val && item.material_description) {
-                            val = extractMaterial(item.material_description, "ARFL100AM");
+                            val = extractMaterial(item.material_description, "");
                         }
                         if (!val) {
-                            val = "ARFL100AM";
+                            val = "";
                         }
                     }
                     if (m.targetField === 'RequestedQuantity' || m.targetField === 'Quantity') {
@@ -2762,6 +2893,10 @@ function buildSAPPayload(docData, settings) {
                     itemPayload[m.targetField] = val;
                 }
             });
+
+            if (!itemPayload.hasOwnProperty('MaterialDescription')) {
+                itemPayload.MaterialDescription = item.material_description || item.sap_material_description || "";
+            }
 
             if (resolvedContext === 'SalesOrder') {
                 const pricingConditionType = settings.sales_order_pricing_condition;
@@ -2797,7 +2932,10 @@ function buildSAPPayload(docData, settings) {
     const poNum = docData.header?.customer_po_number || docData.header?.po_number || docData.header?.purchase_order_number || docData.header?.order_reference || "AUTO_PO";
     const currency = docData.totals?.currency || "USD";
     const partnerName = docData.header?.supplier_name || "BP-CUST";
-    const paymentTerms = docData.header?.payment_terms || "0001";
+    const defaultPaymentTerms = settings.sales_order_payment_terms || "0003";
+    const paymentTerms = docData.header?.payment_terms && docData.header.payment_terms !== "0001"
+        ? docData.header.payment_terms
+        : defaultPaymentTerms;
     const incoTerms = docData.header?.inco_terms || "FOB";
     const soldToParty = String(docData.header?.sold_to_party_number || docData.header?.supplier_number || partnerName || "BP-CUST").trim();
     const shipToParty = String(docData.header?.ship_to_party_number || soldToParty).trim();
@@ -2810,15 +2948,15 @@ function buildSAPPayload(docData, settings) {
         const lineItems = (docData.line_items || []).map((item, index) => {
             const itemNum = item.item_number || String((index + 1) * 10);
             const qty = String(Math.round(parseFloat(item.quantity) || 1));
-            const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
-            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, defaultMat);
+            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, "");
             const uom = item.unit_of_measure || "EA";
 
             const itemPayload = {
                 SalesOrderItem: itemNum,
                 MaterialByCustomer: material,
                 RequestedQuantity: qty,
-                RequestedQuantityUnit: uom
+                RequestedQuantityUnit: uom,
+                MaterialDescription: item.material_description || item.sap_material_description || ""
             };
             if (item.plant || docData.header?.plant) {
                 itemPayload.ProductionPlant = item.plant || docData.header?.plant;
@@ -2844,32 +2982,7 @@ function buildSAPPayload(docData, settings) {
             return itemPayload;
         });
 
-        if (lineItems.length === 0) {
-            const defaultUom = "EA";
-            const fallbackItem = {
-                SalesOrderItem: "10",
-                MaterialByCustomer: "ARFL100AM",
-                RequestedQuantity: "2",
-                RequestedQuantityUnit: defaultUom,
-                ProductionPlant: "1010"
-            };
-
-            const pricingConditionType = settings.sales_order_pricing_condition;
-            if (pricingConditionType) {
-                const conditionCurrency = docData.totals?.currency || "USD";
-                fallbackItem.to_PricingElement = [
-                    {
-                        ConditionType: pricingConditionType,
-                        ConditionRateValue: "100.00",
-                        ConditionCurrency: conditionCurrency,
-                        ConditionQuantity: "1",
-                        ConditionQuantityUnit: defaultUom
-                    }
-                ];
-            }
-
-            lineItems.push(fallbackItem);
-        }
+        // No fallback fake items injected
 
         let btpSoldTo = soldToParty;
         if (btpSoldTo.length > 10) {
@@ -2895,7 +3008,7 @@ function buildSAPPayload(docData, settings) {
             IncotermsClassification: incoTerms.length > 3 ? incoTerms.substring(0, 3).toUpperCase() : incoTerms.toUpperCase(),
             IncotermsTransferLocation: "Destination",
             IncotermsLocation1: "Destination",
-            CustomerPaymentTerms: paymentTerms === "0001" ? "0003" : paymentTerms,
+            CustomerPaymentTerms: paymentTerms,
             CustomerAccountAssignmentGroup: "01",
             BillingDocumentDate: reqDeliveryDate,
             to_Item: lineItems
@@ -2906,10 +3019,8 @@ function buildSAPPayload(docData, settings) {
             const itemNum = item.item_number || String((index + 1) * 10);
             const qty = String(Math.round(parseFloat(item.quantity) || 1));
             const price = String(Math.round(parseFloat(item.price || item.unit_price) || 0));
-            const defaultMat = index === 0 ? "ARFL100AM" : "GMB515BAM";
-            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, defaultMat);
+            const material = item.sap_material_number || item.customer_material_number || item.supplier_material_number || extractMaterial(item.material_description, "");
             const uom = item.unit_of_measure || "EA";
-
             return {
                 Doc_typ: settings.sales_order_default_type || "OR1",
                 Item_num: itemNum,
@@ -2917,7 +3028,8 @@ function buildSAPPayload(docData, settings) {
                 Quantity: qty,
                 Uom: uom,
                 Deliv_date: formatSAPDate(docData.header?.requested_date || docData.header?.requested_delivery_date || poDate),
-                Price: price
+                Price: price,
+                MaterialDescription: item.material_description || item.sap_material_description || ""
             };
         });
 
@@ -3182,7 +3294,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
                     if (match) sapDocNumber = match[1];
                 }
                 if (!sapDocNumber) {
-                    sapDocNumber = `90000${Math.floor(100000 + Math.random() * 900000)}`;
+                    sapDocNumber = '';
                 }
 
                 docData.status = 'success';
@@ -3220,9 +3332,9 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
                 await storageService.saveFile('sap_json', `${id}.json`, docData, true);
 
                 return res.status(btpPostResp.status).json({
+                    success: false,
                     error: `SAP BTP CAP API returned Status ${btpPostResp.status}`,
-                    details: btpText,
-                    message: "Note: Create Sales Order endpoint on BTP CAP is still planned/mocked on SAP Gateway. The OAuth credentials, token exchange, and OData payload format are fully verified!"
+                    details: btpText
                 });
             }
         }
@@ -3610,13 +3722,13 @@ async function runGmailSync(settings, isFirstSync) {
                         m => m.email && m.email.trim().toLowerCase() === cleanSender
                     );
 
-                    const finalExpectedDocType = matchedMapping?.expected_doc_type || 'Vendor Invoice';
-                    const finalCustName = matchedMapping?.partnerName || '';
-                    const finalCustAddr = matchedMapping?.customer_address || '';
-                    const finalSalesOrg = matchedMapping?.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
-                    const finalDistrChan = matchedMapping?.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
-                    const finalDivision = matchedMapping?.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
-                    const finalCompanyCode = matchedMapping?.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
+                    const finalExpectedDocType = matchedMapping?.expected_doc_type || emailConf.expected_doc_type || 'Vendor Invoice';
+                    const finalCustName = matchedMapping?.partnerName || emailConf.customer_name || '';
+                    const finalCustAddr = matchedMapping?.customer_address || emailConf.customer_address || '';
+                    const finalSalesOrg = matchedMapping?.sales_org || emailConf.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
+                    const finalDistrChan = matchedMapping?.distr_chan || emailConf.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                    const finalDivision = matchedMapping?.division || emailConf.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                    const finalCompanyCode = matchedMapping?.company_code || emailConf.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
 
                     if (matchedMapping) {
                         console.log(`📫 [Sync] Mapped sender ${cleanSender} to partner ${finalCustName} (expects: ${finalExpectedDocType})`);
@@ -3984,13 +4096,13 @@ async function runOutlookSync(isFirstSync) {
                             m => m.email && m.email.trim().toLowerCase() === cleanSender
                         );
 
-                        const finalExpectedDocType = matchedMapping?.expected_doc_type || 'Vendor Invoice';
-                        const finalCustName = matchedMapping?.partnerName || '';
-                        const finalCustAddr = matchedMapping?.customer_address || '';
-                        const finalSalesOrg = matchedMapping?.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
-                        const finalDistrChan = matchedMapping?.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
-                        const finalDivision = matchedMapping?.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
-                        const finalCompanyCode = matchedMapping?.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
+                        const finalExpectedDocType = matchedMapping?.expected_doc_type || account.expected_doc_type || 'Vendor Invoice';
+                        const finalCustName = matchedMapping?.partnerName || account.customer_name || '';
+                        const finalCustAddr = matchedMapping?.customer_address || account.customer_address || '';
+                        const finalSalesOrg = matchedMapping?.sales_org || account.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
+                        const finalDistrChan = matchedMapping?.distr_chan || account.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                        const finalDivision = matchedMapping?.division || account.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                        const finalCompanyCode = matchedMapping?.company_code || account.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
 
                         if (matchedMapping) {
                             console.log(`📫 [Sync] Outlook mapped sender ${cleanSender} to partner ${finalCustName} (expects: ${finalExpectedDocType})`);
@@ -4056,13 +4168,13 @@ async function runOutlookSync(isFirstSync) {
                                 m => m.email && m.email.trim().toLowerCase() === cleanSender
                             );
 
-                            const finalExpectedDocType = matchedMapping?.expected_doc_type || 'Vendor Invoice';
-                            const finalCustName = matchedMapping?.partnerName || '';
-                            const finalCustAddr = matchedMapping?.customer_address || '';
-                            const finalSalesOrg = matchedMapping?.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
-                            const finalDistrChan = matchedMapping?.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
-                            const finalDivision = matchedMapping?.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
-                            const finalCompanyCode = matchedMapping?.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
+                            const finalExpectedDocType = matchedMapping?.expected_doc_type || account.expected_doc_type || 'Vendor Invoice';
+                            const finalCustName = matchedMapping?.partnerName || account.customer_name || '';
+                            const finalCustAddr = matchedMapping?.customer_address || account.customer_address || '';
+                            const finalSalesOrg = matchedMapping?.sales_org || account.sales_org || (finalExpectedDocType === 'Sales Order' ? '1010' : '');
+                            const finalDistrChan = matchedMapping?.distr_chan || account.distr_chan || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                            const finalDivision = matchedMapping?.division || account.division || (finalExpectedDocType === 'Sales Order' ? '01' : '');
+                            const finalCompanyCode = matchedMapping?.company_code || account.company_code || (finalExpectedDocType === 'Vendor Invoice' ? '1010' : '');
 
                             if (matchedMapping) {
                                 console.log(`📫 [Sync] Outlook body mapped sender ${cleanSender} to partner ${finalCustName} (expects: ${finalExpectedDocType})`);

@@ -392,6 +392,7 @@ export default function DocumentDetail() {
   const fileExt = currentDoc?.extension?.toLowerCase() || '.pdf';
   const isImage = ['.png', '.jpg', '.jpeg', '.webp', '.tiff'].includes(fileExt);
   const isPdf = fileExt === '.pdf';
+  const isWord = ['.docx', '.doc'].includes(fileExt);
   const fileUrl = `${API_BASE}/${currentDoc.is_pending ? 'pending-docs' : 'pdf-docs'}/${currentDoc.filename || `${currentDoc.id}.pdf`}`;
 
   const isSalesOrder = currentDoc?.data?.header?.context === "Sales Order";
@@ -709,6 +710,8 @@ export default function DocumentDetail() {
                             alt="Document Preview"
                           />
                         </div>
+                      ) : isWord ? (
+                        <DocxViewer url={fileUrl} />
                       ) : currentDoc.extracted_text !== undefined && currentDoc.extracted_text !== null ? (
                         <div className="flex-1 flex flex-col bg-card border border-border rounded-lg overflow-hidden min-h-[500px]">
                           {/* Text Preview Toolbar */}
@@ -1250,6 +1253,9 @@ export default function DocumentDetail() {
                                           <div className="text-[10px] text-indigo-900 mt-0.5 font-semibold truncate max-w-[220px]" title={item.sap_material_description}>
                                             {item.sap_material_description || "—"}
                                           </div>
+                                          <div className="text-[9px] text-indigo-600/80 italic mt-1 font-medium leading-tight max-w-[220px]" title={currentDoc.data.line_item_origins[idx].sap_material_number}>
+                                            {currentDoc.data.line_item_origins[idx].sap_material_number}
+                                          </div>
                                         </>
                                       ) : (
                                         <span className="text-muted-foreground font-normal italic text-[10px]">No CMIR API Match</span>
@@ -1588,6 +1594,95 @@ function DataSelect({ label, value, options, onChange }: { label: string; value:
           <option key={opt} value={opt}>{opt}</option>
         ))}
       </select>
+    </div>
+  );
+}
+
+import { useRef } from "react";
+
+function DocxViewer({ url }: { url: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+    
+    fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+        return res.blob();
+      })
+      .then(async (blob) => {
+        if (!active) return;
+        if (containerRef.current) {
+          containerRef.current.innerHTML = "";
+          try {
+            const { renderAsync } = await import("docx-preview");
+            await renderAsync(blob, containerRef.current, undefined, {
+              className: "docx-render-container",
+              inWrapper: false,
+              ignoreWidth: false,
+              ignoreHeight: false,
+              debug: false,
+            });
+            if (active) setLoading(false);
+          } catch (renderErr: any) {
+            console.error("docx-preview error:", renderErr);
+            if (active) {
+              setError("Could not parse Word document styling natively.");
+              setLoading(false);
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        if (active) {
+          setError("Failed to fetch Word document source.");
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [url]);
+
+  return (
+    <div className="flex-1 flex flex-col bg-white overflow-hidden min-h-[500px] relative border border-border rounded-lg shadow-inner">
+      <style>{`
+        .docx-render-container {
+          background-color: white !important;
+          box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1) !important;
+          border: 1px solid #e2e8f0 !important;
+          padding: 2.5rem !important;
+          max-width: 800px !important;
+          margin: 0 auto !important;
+          color: black !important;
+        }
+        .docx-render-container p, .docx-render-container span, .docx-render-container td {
+          color: black !important;
+        }
+      `}</style>
+      {loading && (
+        <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center z-10 animate-in fade-in duration-200">
+          <div className="w-8 h-8 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
+          <p className="text-xs text-muted-foreground mt-2 font-medium">Loading realistic document layout...</p>
+        </div>
+      )}
+      {error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-muted/5">
+          <AlertTriangle className="h-8 w-8 text-destructive opacity-40 mb-2" />
+          <p className="text-xs text-muted-foreground max-w-xs">{error}</p>
+        </div>
+      )}
+      <div 
+        ref={containerRef} 
+        className="flex-1 p-8 overflow-auto max-h-[600px] select-text docx-viewer-body bg-slate-50/50 flex justify-center"
+      />
     </div>
   );
 }

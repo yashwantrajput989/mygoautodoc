@@ -27,6 +27,7 @@ import {
   DollarSign,
   RefreshCw,
   ShoppingCart,
+  Sliders,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +44,7 @@ const sidebarItems = [
   { id: "pricing", label: "Price Determination", icon: DollarSign },
   { id: "sales_order_context", label: "Sales Order Context", icon: ShoppingCart },
   { id: "tokens", label: "Token Usage Logs", icon: Activity },
+  { id: "defaults", label: "Defaults", icon: Sliders },
   { id: "roles", label: "Manage Roles", icon: Key },
   { id: "credits", label: "Manage AI Credits", icon: Zap },
   { id: "users", label: "User Management", icon: Users },
@@ -88,6 +90,7 @@ export default function SettingsPage() {
           {activeTab === "pricing" && <PriceDeterminationSettings />}
           {activeTab === "sales_order_context" && <SalesOrderContextSettings />}
           {activeTab === "tokens" && <TokenUsageLogs />}
+          {activeTab === "defaults" && <DefaultsSettings />}
         </div>
       </div>
     </div>
@@ -113,6 +116,8 @@ function AIPreferences() {
   });
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [tokenLogs, setTokenLogs] = useState<any[]>([]);
+  const [isLoadingLogsList, setIsLoadingLogsList] = useState(true);
 
   const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({
     openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
@@ -158,6 +163,21 @@ function AIPreferences() {
     }
   };
 
+  const fetchTokenLogs = async () => {
+    setIsLoadingLogsList(true);
+    try {
+      const res = await fetch(`${API_BASE}/settings/token-usage`);
+      if (res.ok) {
+        const data = await res.json();
+        setTokenLogs(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch token logs", err);
+    } finally {
+      setIsLoadingLogsList(false);
+    }
+  };
+
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
       .then((res) => res.json())
@@ -190,6 +210,8 @@ function AIPreferences() {
       .catch(() => {
         toast.error("Failed to load settings data");
       });
+
+    fetchTokenLogs();
   }, []);
 
   const handleSave = async (provider: string) => {
@@ -229,22 +251,22 @@ function AIPreferences() {
   const providers = [
     {
       id: "OpenAI",
-      color: "bg-green-500",
-      description: "GPT-4 - Embeddings - Recommended",
+      color: "bg-emerald-500",
+      description: "GPT-4o & GPT-4o-mini",
       keyName: "openai",
     },
     {
       id: "Claude",
       label: "Claude (Anthropic)",
-      color: "bg-orange-500",
-      description: "claude-sonnet-4-6 - Long context",
+      color: "bg-amber-500",
+      description: "Claude 3.5 Sonnet & Haiku",
       keyName: "anthropic",
     },
     {
       id: "Gemini",
       label: "Gemini (Google)",
       color: "bg-blue-500",
-      description: "gemini-3.5-flash - Multimodal",
+      description: "Gemini 2.5 Flash & 2.5 Pro",
       keyName: "gemini",
     },
     {
@@ -263,29 +285,80 @@ function AIPreferences() {
     },
   ];
 
+  const activeProviderKey = (activeProvider === "Claude" ? "anthropic" : (activeProvider || "").toLowerCase()) || "gemini";
+  const currentActiveModel = models[activeProviderKey as keyof typeof models] || "Not selected";
+  const cumulativeTokens = tokenLogs.reduce((sum, entry) => sum + (entry.totalTokens || 0), 0);
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
-        <h2 className="text-2xl font-bold mb-1">AI Preferences</h2>
-        <p className="text-muted-foreground text-sm">Configure API keys and choose which LLM powers each agent</p>
+        <h2 className="text-2xl font-bold mb-1">AI Model Management</h2>
+        <p className="text-muted-foreground text-sm font-medium">Redesign active models, view real-time token logs, and configure API integrations.</p>
       </div>
 
-      <div className="space-y-6">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-          <Cpu className="h-4 w-4" /> LLM Providers & API Keys
+      {/* Connection Dashboard Card */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="col-span-2 p-6 rounded-2xl border border-border bg-gradient-to-br from-card/85 to-card/40 flex flex-col justify-between shadow-sm relative overflow-hidden">
+          <div className="absolute right-0 top-0 w-32 h-32 bg-primary/5 rounded-full filter blur-3xl pointer-events-none" />
+          <div className="flex items-start justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Active Connected LLM</span>
+              <h3 className="text-xl font-bold text-foreground flex items-center gap-2 mt-1">
+                {activeProvider} <span className="font-mono text-sm px-2 py-0.5 rounded bg-muted text-muted-foreground">{currentActiveModel}</span>
+              </h3>
+            </div>
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-semibold">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> Active Pipeline
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 mt-6 pt-4 border-t border-border/50">
+            <div className="space-y-0.5">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">Cumulative Tokens Parsed</span>
+              <span className="text-xl font-mono font-bold text-primary">{cumulativeTokens.toLocaleString()}</span>
+            </div>
+            <div className="space-y-0.5">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">Documents Processed</span>
+              <span className="text-xl font-mono font-bold text-foreground">{tokenLogs.length}</span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="p-6 rounded-2xl border border-border bg-card flex flex-col justify-between shadow-sm">
+          <div className="space-y-2">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-1.5">
+              <Zap className="h-3.5 w-3.5 text-primary" /> Processing Performance
+            </span>
+            <p className="text-xs text-muted-foreground leading-normal font-medium">
+              Parser automatically extracts fields, checks duplicates, and matches pricing conditions in SAP.
+            </p>
+          </div>
+          <button 
+            onClick={fetchTokenLogs}
+            className="mt-4 w-full py-2 bg-muted text-foreground text-xs font-bold rounded-lg hover:bg-muted/80 transition-all flex items-center justify-center gap-1.5 active:scale-95"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", isLoadingLogsList && "animate-spin")} /> Refresh Statistics
+          </button>
+        </div>
+      </div>
+
+      {/* Model Setup Stack */}
+      <div className="space-y-4">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+          <Cpu className="h-4 w-4" /> API Provider Configurations
         </h3>
 
         <div className="space-y-4">
           {providers.map((p) => {
             const hasKey = !!keys[p.keyName as keyof typeof keys];
+            const isCurrentlyActive = activeProvider === p.id;
             return (
               <div
                 key={p.id}
                 className={cn(
-                  "p-6 rounded-xl border transition-all relative overflow-hidden",
-                  activeProvider === p.id
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                    : "border-border bg-card hover:bg-muted/30"
+                  "p-5 rounded-2xl border transition-all relative overflow-hidden bg-card",
+                  isCurrentlyActive
+                    ? "border-primary/50 shadow-md ring-1 ring-primary/10"
+                    : "border-border hover:bg-muted/10"
                 )}
               >
                 <div className="flex items-start gap-4 mb-4">
@@ -293,8 +366,11 @@ function AIPreferences() {
                     <input
                       type="radio"
                       checked={activeProvider === p.id}
-                      onChange={() => setActiveProvider(p.id)}
-                      className="w-4 h-4 text-primary focus:ring-primary border-border"
+                      onChange={() => {
+                        setActiveProvider(p.id);
+                        handleSave(p.id);
+                      }}
+                      className="w-4 h-4 text-primary focus:ring-primary border-border cursor-pointer"
                     />
                   </div>
                   <div className="flex-1">
@@ -316,7 +392,7 @@ function AIPreferences() {
                         )}
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">{p.description}</p>
+                    <p className="text-[11px] text-muted-foreground font-medium mt-0.5">{p.description}</p>
                   </div>
                 </div>
 
@@ -408,6 +484,80 @@ function AIPreferences() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* Usage Logs Panel */}
+      <div className="space-y-4 pt-4">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+          <Database className="h-4 w-4" /> Recent Document Parsing Logs
+        </h3>
+
+        <div className="border border-border rounded-xl bg-card overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-muted/30 border-b border-border text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                  <th className="p-4">Document / Context</th>
+                  <th className="p-4">Timestamp</th>
+                  <th className="p-4">AI Model</th>
+                  <th className="p-4 text-center">Prompt Tokens</th>
+                  <th className="p-4 text-center">Completion Tokens</th>
+                  <th className="p-4 text-center">Total Tokens</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60">
+                {isLoadingLogsList ? (
+                  <tr>
+                    <td colSpan={6} className="p-8 text-center text-muted-foreground">
+                      <div className="flex flex-col items-center gap-2 py-4">
+                        <div className="w-6 h-6 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
+                        <span>Loading usage records...</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : tokenLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-8 text-center text-muted-foreground font-medium italic">
+                      No parsing records logged yet. Process a document to record token usage metrics.
+                    </td>
+                  </tr>
+                ) : (
+                  tokenLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-muted/5 transition-colors font-medium">
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4 text-primary shrink-0" />
+                          <span className="font-bold text-foreground break-all max-w-[220px]" title={log.docName}>
+                            {log.docName}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-muted-foreground">
+                        {new Date(log.timestamp).toLocaleString()}
+                      </td>
+                      <td className="p-4">
+                        <span className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-bold">
+                          {log.model}
+                        </span>
+                      </td>
+                      <td className="p-4 text-center font-mono text-muted-foreground">
+                        {log.promptTokens.toLocaleString()}
+                      </td>
+                      <td className="p-4 text-center font-mono text-muted-foreground">
+                        {log.completionTokens.toLocaleString()}
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="font-mono font-bold bg-primary/10 border border-primary/20 text-primary px-2 py-0.5 rounded-full">
+                          {log.totalTokens.toLocaleString()}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
@@ -503,41 +653,15 @@ function ManageSources() {
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newServer, setNewServer] = useState("imap.gmail.com");
+  const [newExpectedDocType, setNewExpectedDocType] = useState("Vendor Invoice");
+  const [newSalesOrg, setNewSalesOrg] = useState("");
+  const [newDistrChan, setNewDistrChan] = useState("");
+  const [newDivision, setNewDivision] = useState("");
+  const [newCompanyCode, setNewCompanyCode] = useState("");
   
   // Testing connection state map: email -> boolean
   const [isTestingEmail, setIsTestingEmail] = useState<Record<string, boolean>>({});
   const [emailStatus, setEmailStatus] = useState<Record<string, "Connected" | "Disconnected" | "Pending">>({});
-
-  // SAP Business Partner Registry Lookup State
-  const [lookupQuery, setLookupQuery] = useState("");
-  const [isFetchingBP, setIsFetchingBP] = useState(false);
-  const [lookupResult, setLookupResult] = useState<any>(null);
-  const [lookupError, setLookupError] = useState<string | null>(null);
-
-  const handleFetchBP = async () => {
-    if (!lookupQuery.trim()) {
-      toast.error("Please enter a customer code or name to search");
-      return;
-    }
-    setIsFetchingBP(true);
-    setLookupError(null);
-    setLookupResult(null);
-    try {
-      const res = await fetch(`${API_BASE}/sap/business-partner?query=${encodeURIComponent(lookupQuery.trim())}`);
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to fetch Business Partner");
-      }
-      setLookupResult(data);
-      toast.success("SAP Business Partner fetched successfully!");
-    } catch (err: any) {
-      console.error(err);
-      setLookupError(err.message || "An unexpected error occurred");
-      toast.error(err.message || "Failed to fetch Business Partner");
-    } finally {
-      setIsFetchingBP(false);
-    }
-  };
 
   const handleEmailChange = (val: string) => {
     setNewEmail(val);
@@ -547,6 +671,7 @@ function ManageSources() {
     fetch(`${API_BASE}/settings`)
       .then((res) => res.json())
       .then((data) => {
+        if (!data) return;
         let currentEmails = data.emails || [];
         
         // Migrate legacy Gmail config if emails list is empty and user_email exists
@@ -573,12 +698,29 @@ function ManageSources() {
         // Handle Outlook authentication callback success redirect
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('outlook') === 'success' && data.outlook_tokens) {
+          const pendingDocType = localStorage.getItem('outlook_pending_expected_doc_type') || 'Vendor Invoice';
+          const pendingSalesOrg = localStorage.getItem('outlook_pending_sales_org') || '';
+          const pendingDistrChan = localStorage.getItem('outlook_pending_distr_chan') || '';
+          const pendingDivision = localStorage.getItem('outlook_pending_division') || '';
+          const pendingCompanyCode = localStorage.getItem('outlook_pending_company_code') || '';
+
+          localStorage.removeItem('outlook_pending_expected_doc_type');
+          localStorage.removeItem('outlook_pending_sales_org');
+          localStorage.removeItem('outlook_pending_distr_chan');
+          localStorage.removeItem('outlook_pending_division');
+          localStorage.removeItem('outlook_pending_company_code');
+
           const newOutlookEmail = {
             id: Date.now(),
             email: data.outlook_tokens.user_principal_name || 'Outlook Mail',
             provider: 'Outlook',
             outlook_tokens: data.outlook_tokens,
-            active: true
+            active: true,
+            expected_doc_type: pendingDocType,
+            sales_org: pendingSalesOrg,
+            distr_chan: pendingDistrChan,
+            division: pendingDivision,
+            company_code: pendingCompanyCode
           };
 
           // Filter out existing email with same address to avoid duplicate
@@ -606,9 +748,9 @@ function ManageSources() {
 
         // Initialize statuses
         currentEmails.forEach((eConf: any) => {
-          if (eConf.provider === 'Outlook') {
+          if (eConf && eConf.provider === 'Outlook') {
             setEmailStatus(prev => ({ ...prev, [eConf.email]: "Connected" }));
-          } else {
+          } else if (eConf) {
             setEmailStatus(prev => ({ ...prev, [eConf.email]: eConf.password ? "Connected" : "Disconnected" }));
           }
         });
@@ -678,7 +820,12 @@ function ManageSources() {
       password: newPassword,
       server: newServer.trim() || "imap.gmail.com",
       active: true,
-      provider: "Gmail"
+      provider: "Gmail",
+      expected_doc_type: newExpectedDocType,
+      sales_org: newExpectedDocType === "Sales Order" ? newSalesOrg.trim() : "",
+      distr_chan: newExpectedDocType === "Sales Order" ? newDistrChan.trim() : "",
+      division: newExpectedDocType === "Sales Order" ? newDivision.trim() : "",
+      company_code: newExpectedDocType === "Vendor Invoice" ? newCompanyCode.trim() : ""
     };
     const updated = [...emails, emailObj];
     handleSaveEmails(updated);
@@ -686,6 +833,12 @@ function ManageSources() {
   };
 
   const handleAddEmailOutlook = () => {
+    localStorage.setItem('outlook_pending_expected_doc_type', newExpectedDocType);
+    localStorage.setItem('outlook_pending_sales_org', newExpectedDocType === "Sales Order" ? newSalesOrg.trim() : "");
+    localStorage.setItem('outlook_pending_distr_chan', newExpectedDocType === "Sales Order" ? newDistrChan.trim() : "");
+    localStorage.setItem('outlook_pending_division', newExpectedDocType === "Sales Order" ? newDivision.trim() : "");
+    localStorage.setItem('outlook_pending_company_code', newExpectedDocType === "Vendor Invoice" ? newCompanyCode.trim() : "");
+
     toast.info("Redirecting to Microsoft secure sign-in portal...");
     window.location.href = `${API_BASE}/auth/outlook/login?redirect=true`;
   };
@@ -694,6 +847,11 @@ function ManageSources() {
     setNewEmail("");
     setNewPassword("");
     setNewServer("imap.gmail.com");
+    setNewExpectedDocType("Vendor Invoice");
+    setNewSalesOrg("");
+    setNewDistrChan("");
+    setNewDivision("");
+    setNewCompanyCode("");
     setIsAdding(false);
     setAddStep(1);
   };
@@ -801,7 +959,69 @@ function ManageSources() {
             {/* STEP 2: CONNECTION INFO & FINISH */}
             {addStep === 2 && (
               <div className="space-y-4">
-                <label className="text-xs font-bold text-muted-foreground uppercase block">Connection Security details</label>
+                <label className="text-xs font-bold text-muted-foreground uppercase block">Connection Configuration details</label>
+                
+                {/* Routing & Sales Area Config */}
+                <div className="p-4 rounded-xl bg-card border border-border space-y-4">
+                  <h5 className="text-xs font-bold text-foreground uppercase tracking-wider">Document Routing Details</h5>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-muted-foreground uppercase">Expected Document Type</label>
+                      <select
+                        value={newExpectedDocType}
+                        onChange={(e) => setNewExpectedDocType(e.target.value)}
+                        className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-medium"
+                      >
+                        <option value="Vendor Invoice">Vendor Invoice</option>
+                        <option value="Sales Order">Sales Order</option>
+                      </select>
+                    </div>
+
+                    {newExpectedDocType === "Sales Order" ? (
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-muted-foreground uppercase">Sales Org</label>
+                          <input
+                            value={newSalesOrg}
+                            onChange={(e) => setNewSalesOrg(e.target.value)}
+                            placeholder="1010"
+                            className="w-full h-10 px-2 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-muted-foreground uppercase">Dist Channel</label>
+                          <input
+                            value={newDistrChan}
+                            onChange={(e) => setNewDistrChan(e.target.value)}
+                            placeholder="01"
+                            className="w-full h-10 px-2 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-muted-foreground uppercase">Division</label>
+                          <input
+                            value={newDivision}
+                            onChange={(e) => setNewDivision(e.target.value)}
+                            placeholder="01"
+                            className="w-full h-10 px-2 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-mono"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase">Company Code</label>
+                        <input
+                          value={newCompanyCode}
+                          onChange={(e) => setNewCompanyCode(e.target.value)}
+                          placeholder="1010"
+                          className="w-full h-10 px-3 rounded-lg border border-border bg-background text-xs outline-none focus:ring-2 focus:ring-primary font-mono"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <label className="text-xs font-bold text-muted-foreground uppercase block mt-4">Provider Security Details</label>
                 
                 {selectedProvider === "Gmail" ? (
                   <div className="space-y-4">
@@ -906,8 +1126,9 @@ function ManageSources() {
                   <tr className="bg-muted/30 border-b border-border">
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-16">Active</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Email Connection</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Provider</th>
-                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-24">Status</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-20">Provider</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Routing Details</th>
+                    <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider w-20">Status</th>
                     <th className="p-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right w-20">Actions</th>
                   </tr>
                 </thead>
@@ -938,6 +1159,73 @@ function ManageSources() {
                             <Mail className="h-3 w-3" /> Gmail / IMAP
                           </span>
                         )}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex flex-col gap-1.5">
+                          <select
+                            value={eConf.expected_doc_type || "Vendor Invoice"}
+                            onChange={(e) => {
+                              const updatedVal = e.target.value;
+                              handleFieldChange(eConf.id, "expected_doc_type", updatedVal);
+                              handleSaveEmails(emails.map(x => x.id === eConf.id ? { ...x, expected_doc_type: updatedVal } : x));
+                            }}
+                            className="bg-background border border-border rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary font-medium w-36"
+                          >
+                            <option value="Sales Order">Sales Order</option>
+                            <option value="Vendor Invoice">Vendor Invoice</option>
+                          </select>
+                          {(eConf.expected_doc_type || "Vendor Invoice") === "Sales Order" ? (
+                            <div className="flex items-center gap-2 mt-1">
+                              <div className="space-y-0.5">
+                                <span className="text-[9px] text-muted-foreground uppercase font-bold">Sales Org</span>
+                                <input
+                                  type="text"
+                                  value={eConf.sales_org || ""}
+                                  onChange={(e) => handleFieldChange(eConf.id, "sales_org", e.target.value)}
+                                  onBlur={handleBlurSave}
+                                  placeholder="1010"
+                                  className="w-14 h-7 px-1.5 rounded border border-border bg-background text-[11px] font-mono outline-none focus:ring-1 focus:ring-primary"
+                                />
+                              </div>
+                              <div className="space-y-0.5">
+                                <span className="text-[9px] text-muted-foreground uppercase font-bold">Dist Channel</span>
+                                <input
+                                  type="text"
+                                  value={eConf.distr_chan || ""}
+                                  onChange={(e) => handleFieldChange(eConf.id, "distr_chan", e.target.value)}
+                                  onBlur={handleBlurSave}
+                                  placeholder="01"
+                                  className="w-14 h-7 px-1.5 rounded border border-border bg-background text-[11px] font-mono outline-none focus:ring-1 focus:ring-primary"
+                                />
+                              </div>
+                              <div className="space-y-0.5">
+                                <span className="text-[9px] text-muted-foreground uppercase font-bold">Division</span>
+                                <input
+                                  type="text"
+                                  value={eConf.division || ""}
+                                  onChange={(e) => handleFieldChange(eConf.id, "division", e.target.value)}
+                                  onBlur={handleBlurSave}
+                                  placeholder="01"
+                                  className="w-14 h-7 px-1.5 rounded border border-border bg-background text-[11px] font-mono outline-none focus:ring-1 focus:ring-primary"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 mt-1">
+                              <div className="space-y-0.5">
+                                <span className="text-[9px] text-muted-foreground uppercase font-bold">Company Code</span>
+                                <input
+                                  type="text"
+                                  value={eConf.company_code || ""}
+                                  onChange={(e) => handleFieldChange(eConf.id, "company_code", e.target.value)}
+                                  onBlur={handleBlurSave}
+                                  placeholder="1010"
+                                  className="w-16 h-7 px-1.5 rounded border border-border bg-background text-[11px] font-mono outline-none focus:ring-1 focus:ring-primary"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td className="p-4">
                         {emailStatus[eConf.email] === "Pending" ? (
@@ -986,138 +1274,6 @@ function ManageSources() {
           )}
         </div>
 
-        {/* SAP Business Partner Lookup Panel */}
-        <div className="border border-border/80 rounded-2xl overflow-hidden bg-indigo-500/5 backdrop-blur-sm shadow-lg p-6 border-indigo-500/15">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-500">
-              <Database className="h-6 w-6" />
-            </div>
-            <div>
-              <h3 className="font-bold text-foreground text-sm">SAP Business Partner Registry Lookup</h3>
-              <p className="text-[10px] text-muted-foreground">Query live SAP S/4HANA Business Partner API details directly from settings</p>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <p className="text-xs text-muted-foreground max-w-2xl leading-relaxed">
-              Verify customer mapping data by querying the active SAP Business Partner OData service. Select from one of the active customer codes or type any custom customer name/number query to verify the SAP API response details.
-            </p>
-
-            <div className="flex items-center gap-3 max-w-xl">
-              <div className="flex-1 relative">
-                <input
-                  type="text"
-                  value={lookupQuery}
-                  onChange={(e) => setLookupQuery(e.target.value)}
-                  placeholder="e.g. C00003 or Apothekare"
-                  className="w-full h-10 px-3.5 pr-20 rounded-xl border border-border bg-background text-xs outline-none focus:ring-1 focus:ring-primary font-bold shadow-inner"
-                  list="configured-bp-suggestions"
-                />
-                <datalist id="configured-bp-suggestions">
-                  {Array.from(new Set(emails.map(e => e.customer_name).filter(Boolean))).map((custName) => (
-                    <option key={custName} value={custName} />
-                  ))}
-                </datalist>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1.5">
-                  {emails.map(e => e.customer_name).filter(Boolean).length > 0 && (
-                    <select
-                      onChange={(e) => setLookupQuery(e.target.value)}
-                      className="bg-transparent border-none text-[10px] font-bold text-indigo-600 outline-none cursor-pointer max-w-[80px]"
-                      defaultValue=""
-                    >
-                      <option value="" disabled>Saved</option>
-                      {Array.from(new Set(emails.map(e => e.customer_name).filter(Boolean))).map((custName) => (
-                        <option key={custName} value={custName}>{custName}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </div>
-              <button
-                onClick={handleFetchBP}
-                disabled={isFetchingBP}
-                className="px-5 h-10 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-50 flex items-center gap-1.5"
-              >
-                {isFetchingBP ? (
-                  <>
-                    <Activity className="h-4.5 w-4.5 animate-spin" />
-                    Fetching...
-                  </>
-                ) : (
-                  <>
-                    <Globe className="h-4 w-4" />
-                    Fetch SAP Record
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* Lookup Results pane */}
-            {isFetchingBP && (
-              <div className="p-6 border border-border rounded-2xl bg-card/50 space-y-3 animate-pulse">
-                <div className="h-4 bg-muted rounded w-1/4" />
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="h-8 bg-muted rounded" />
-                  <div className="h-8 bg-muted rounded" />
-                  <div className="h-8 bg-muted rounded col-span-2" />
-                </div>
-              </div>
-            )}
-
-            {lookupError && (
-              <div className="p-4 rounded-xl border border-red-500/20 bg-red-500/5 text-xs text-red-400 font-bold max-w-xl flex items-center gap-2 animate-in fade-in duration-300">
-                <div className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                {lookupError}
-              </div>
-            )}
-
-            {lookupResult && (
-              <div className="p-5 border border-indigo-500/20 bg-card rounded-2xl space-y-4 shadow-md max-w-2xl animate-in slide-in-from-top-2 duration-300">
-                <div className="flex items-center justify-between border-b border-border pb-3">
-                  <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider font-bold">SAP BP OData Response Record</span>
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-500/10 text-indigo-500 border border-indigo-500/20">
-                    Live Match
-                  </span>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                  <div className="p-3 bg-muted/30 border rounded-xl">
-                    <span className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">Business Partner ID</span>
-                    <span className="font-mono font-bold text-foreground">{lookupResult.BusinessPartner}</span>
-                  </div>
-
-                  <div className="p-3 bg-muted/30 border rounded-xl">
-                    <span className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">Business Partner Name</span>
-                    <span className="font-bold text-foreground">{lookupResult.BusinessPartnerName || lookupResult.OrganizationBPName1 || "—"}</span>
-                  </div>
-
-                  <div className="p-3 bg-muted/30 border rounded-xl md:col-span-2">
-                    <span className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">SAP Customer ID (Expanded to_Customer)</span>
-                    <span className="font-mono font-bold text-foreground">
-                      {lookupResult.to_Customer?.Customer || lookupResult.to_Customer?.results?.[0]?.Customer || "N/A"}
-                    </span>
-                  </div>
-
-                  <div className="p-3 bg-muted/30 border rounded-xl md:col-span-2">
-                    <span className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">Billing / Sold-to Address</span>
-                    <span className="font-bold text-foreground leading-relaxed">
-                      {(() => {
-                        const addrList = lookupResult.to_BusinessPartnerAddress?.results || lookupResult.to_BusinessPartnerAddress || [];
-                        const addr = Array.isArray(addrList) ? addrList[0] : addrList;
-                        if (!addr) return "No Address Record associated in SAP";
-                        const street = addr.StreetName || addr.Street || '';
-                        const city = addr.CityName || addr.City || '';
-                        const postal = addr.PostalCode || '';
-                        const country = addr.Country || '';
-                        return [street, city, postal, country].filter(Boolean).join(', ') || "No Address Record associated in SAP";
-                      })()}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -1132,7 +1288,7 @@ function KeywordsWatchlist() {
     fetch(`${API_BASE}/settings`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.email_body_keywords) {
+        if (data && data.email_body_keywords) {
           setKeywords(data.email_body_keywords);
         }
       });
@@ -1618,7 +1774,7 @@ function ManageUsers() {
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-primary/20 to-primary/5 flex items-center justify-center font-black text-primary text-xs">
-                        {u.name ? u.name[0].toUpperCase() : "U"}
+                        {u.name && typeof u.name === 'string' && u.name.trim().length > 0 ? u.name.trim().charAt(0).toUpperCase() : "U"}
                      </div>
                      <div>
                         <div className="font-bold text-sm text-foreground">{u.name}</div>
@@ -2042,160 +2198,36 @@ function BusinessPartnerMappings() {
   );
 }
 
-function PriceDeterminationSettings() {
-  const [customerRequestedPrice, setCustomerRequestedPrice] = useState("");
-  const [calculatePriceFormula, setCalculatePriceFormula] = useState(true);
-  const [priceFormulaType, setPriceFormulaType] = useState("amount_times_qty");
-  const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    fetch(`${API_BASE}/settings`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.customer_requested_price !== undefined) {
-          setCustomerRequestedPrice(data.customer_requested_price);
-        }
-        if (data.calculate_price_formula !== undefined) {
-          setCalculatePriceFormula(data.calculate_price_formula);
-        }
-        if (data.price_formula_type !== undefined) {
-          setPriceFormulaType(data.price_formula_type);
-        }
-      })
-      .catch(() => {
-        toast.error("Failed to load settings data");
-      });
-  }, []);
-
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      const res = await fetch(`${API_BASE}/settings/pricing`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer_requested_price: customerRequestedPrice,
-          calculate_price_formula: calculatePriceFormula,
-          price_formula_type: priceFormulaType,
-        }),
-      });
-      if (res.ok) {
-        toast.success("Pricing preferences saved successfully");
-      } else {
-        throw new Error("Save failed");
-      }
-    } catch (err) {
-      toast.error("Failed to save pricing settings");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div>
-        <h2 className="text-2xl font-bold mb-1">Price Determination</h2>
-        <p className="text-muted-foreground text-sm font-medium">Configure fallback pricing and calculations when line-item prices are missing from documents</p>
-      </div>
-
-      <div className="bg-card border border-border rounded-xl p-6 space-y-6 shadow-sm">
-        {/* Customer Requested Price Config */}
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase tracking-wider text-primary block">
-            Default Customer Requested Price
-          </label>
-          <div className="relative max-w-sm">
-            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <input
-              type="text"
-              placeholder="e.g. 150.00 (leave blank to disable)"
-              value={customerRequestedPrice}
-              onChange={(e) => setCustomerRequestedPrice(e.target.value)}
-              className="pl-9 pr-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
-            />
-          </div>
-          <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
-            If configured, this fixed rate will automatically override or populate any empty line-item unit prices before payload construction.
-          </p>
-        </div>
-
-        <hr className="border-border/60" />
-
-        {/* Dynamic Formula Enable Toggle */}
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-0.5">
-            <label className="text-xs font-bold uppercase tracking-wider text-foreground block">
-              Calculate Missing Price Using Formula
-            </label>
-            <span className="text-[11px] text-muted-foreground leading-normal block max-w-xl">
-              If no unit price is specified in the document and no Customer Requested Price is configured, automatically calculate the price using the selected mathematical formula.
-            </span>
-          </div>
-          <input
-            type="checkbox"
-            checked={calculatePriceFormula}
-            onChange={(e) => setCalculatePriceFormula(e.target.checked)}
-            className="w-4 h-4 rounded text-primary focus:ring-primary border-border mt-1"
-          />
-        </div>
-
-        {/* Formula Selector (Only visible if formula checked) */}
-        {calculatePriceFormula && (
-          <div className="space-y-2 max-w-sm animate-in slide-in-from-top-1 duration-200 ml-1 pl-4 border-l-2 border-primary/20">
-            <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
-              Mathematical Formula Layout
-            </label>
-            <select
-              value={priceFormulaType}
-              onChange={(e) => setPriceFormulaType(e.target.value)}
-              className="w-full h-10 px-3 text-xs border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none font-bold"
-            >
-              <option value="amount_times_qty">Amount * Quantity (Standard Request)</option>
-              <option value="amount_divided_by_qty">Amount / Quantity (Mathematical Unit Price)</option>
-            </select>
-            <p className="text-[10px] text-muted-foreground italic">
-              Selected formula will resolve dynamically at execution time.
-            </p>
-          </div>
-        )}
-      </div>
-
-      <div className="flex justify-end gap-3">
-        <button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex items-center gap-1.5 px-5 py-2.5 bg-primary text-primary-foreground text-xs font-bold rounded-xl hover:shadow-md transition-all active:scale-95 disabled:opacity-50"
-        >
-          <Save className="h-4 w-4" />
-          {isSaving ? "Saving Settings..." : "Save pricing configuration"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function SalesOrderContextSettings() {
+function DefaultsSettings() {
+  const [selectedContext, setSelectedContext] = useState("Sales Order");
   const [defaultOrderType, setDefaultOrderType] = useState("OR1");
   const [defaultOrderBlock, setDefaultOrderBlock] = useState("");
   const [pricingCondition, setPricingCondition] = useState("PR00");
+  const [defaultPaymentTerms, setDefaultPaymentTerms] = useState("0003");
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE}/settings`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.sales_order_default_type !== undefined) {
-          setDefaultOrderType(data.sales_order_default_type);
-        }
-        if (data.sales_order_default_block !== undefined) {
-          setDefaultOrderBlock(data.sales_order_default_block);
-        }
-        if (data.sales_order_pricing_condition !== undefined) {
-          setPricingCondition(data.sales_order_pricing_condition);
+        if (data) {
+          if (data.sales_order_default_type !== undefined) {
+            setDefaultOrderType(data.sales_order_default_type);
+          }
+          if (data.sales_order_default_block !== undefined) {
+            setDefaultOrderBlock(data.sales_order_default_block);
+          }
+          if (data.sales_order_pricing_condition !== undefined) {
+            setPricingCondition(data.sales_order_pricing_condition);
+          }
+          if (data.sales_order_payment_terms !== undefined) {
+            setDefaultPaymentTerms(data.sales_order_payment_terms);
+          }
         }
       })
       .catch(() => {
-        toast.error("Failed to load Sales Order settings");
+        toast.error("Failed to load Defaults settings");
       });
   }, []);
 
@@ -2209,15 +2241,16 @@ function SalesOrderContextSettings() {
           sales_order_default_type: defaultOrderType,
           sales_order_default_block: defaultOrderBlock,
           sales_order_pricing_condition: pricingCondition,
+          sales_order_payment_terms: defaultPaymentTerms,
         }),
       });
       if (res.ok) {
-        toast.success("Sales Order settings saved successfully");
+        toast.success("Defaults settings saved successfully");
       } else {
         throw new Error("Save failed");
       }
     } catch (err: any) {
-      toast.error("Failed to save Sales Order settings");
+      toast.error("Failed to save Defaults settings");
     } finally {
       setIsSaving(false);
     }
@@ -2226,85 +2259,133 @@ function SalesOrderContextSettings() {
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
-        <h2 className="text-2xl font-bold mb-1">Sales Order Context Settings</h2>
+        <h2 className="text-2xl font-bold mb-1">Defaults Configuration</h2>
         <p className="text-muted-foreground text-sm font-medium">
-          Configure default types, blocks, and pricing conditions for SAP S/4HANA Sales Order creation
+          Configure default document parameters and rules for each document context
         </p>
       </div>
 
       <div className="bg-card border border-border rounded-xl p-6 space-y-6 shadow-sm">
-        {/* Default Order Type */}
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase tracking-wider text-primary block">
-            Default Order Type
+        {/* Context Selector */}
+        <div className="space-y-2 max-w-sm">
+          <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block">
+            Select Document Context
           </label>
-          <div className="relative max-w-sm">
-            <input
-              type="text"
-              placeholder="e.g. OR1"
-              value={defaultOrderType}
-              onChange={(e) => setDefaultOrderType(e.target.value)}
-              className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
-            />
-          </div>
-          <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
-            The document type used when creating Sales Orders in SAP (default is <code className="bg-muted px-1 py-0.5 rounded">OR1</code>).
-          </p>
+          <select
+            value={selectedContext}
+            onChange={(e) => setSelectedContext(e.target.value)}
+            className="w-full h-11 px-3 border border-border rounded-lg bg-background focus:ring-1 focus:ring-primary outline-none font-bold text-sm"
+          >
+            <option value="Sales Order">Sales Order</option>
+            <option value="Vendor Invoice">Vendor Invoice</option>
+          </select>
         </div>
 
-        <hr className="border-border/60" />
+        {selectedContext === "Sales Order" ? (
+          <div className="space-y-6 animate-in fade-in duration-300">
+            <hr className="border-border/60" />
 
-        {/* Default Order Block */}
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase tracking-wider text-primary block">
-            Default Order Block (Billing/Delivery Block)
-          </label>
-          <div className="relative max-w-sm">
-            <input
-              type="text"
-              placeholder="e.g. 01 (leave blank for none)"
-              value={defaultOrderBlock}
-              onChange={(e) => setDefaultOrderBlock(e.target.value)}
-              className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
-            />
+            {/* Default Order Type */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-primary block">
+                Default Order Type
+              </label>
+              <div className="relative max-w-sm">
+                <input
+                  type="text"
+                  placeholder="e.g. OR1"
+                  value={defaultOrderType}
+                  onChange={(e) => setDefaultOrderType(e.target.value)}
+                  className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
+                The document type used when creating Sales Orders in SAP (default is <code className="bg-muted px-1 py-0.5 rounded">OR1</code>).
+              </p>
+            </div>
+
+            <hr className="border-border/60" />
+
+            {/* Default Order Block */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-primary block">
+                Default Order Block (Billing/Delivery Block)
+              </label>
+              <div className="relative max-w-sm">
+                <input
+                  type="text"
+                  placeholder="e.g. 01 (leave blank for none)"
+                  value={defaultOrderBlock}
+                  onChange={(e) => setDefaultOrderBlock(e.target.value)}
+                  className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
+                If configured, this block code will be populated as the delivery and billing block reason at the Sales Order header to prevent automatic processing.
+              </p>
+            </div>
+
+            <hr className="border-border/60" />
+
+            {/* Pricing Condition for Gross Price */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-primary block">
+                Pricing Condition for Gross Price
+              </label>
+              <div className="relative max-w-sm">
+                <input
+                  type="text"
+                  placeholder="e.g. PPR0 or PR00"
+                  value={pricingCondition}
+                  onChange={(e) => setPricingCondition(e.target.value)}
+                  className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
+                The condition type (e.g. <code className="bg-muted px-1 py-0.5 rounded">PPR0</code> or <code className="bg-muted px-1 py-0.5 rounded">PR00</code>) used when passing line-item unit prices nested under <code className="bg-muted px-1 py-0.5 rounded">to_PricingElement</code> in the Sales Order payload.
+              </p>
+            </div>
+
+            <hr className="border-border/60" />
+
+            {/* Default Payment Terms */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-primary block">
+                Default Payment Terms (Pyt Terms)
+              </label>
+              <div className="relative max-w-sm">
+                <input
+                  type="text"
+                  placeholder="e.g. 0003"
+                  value={defaultPaymentTerms}
+                  onChange={(e) => setDefaultPaymentTerms(e.target.value)}
+                  className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium font-mono"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
+                The payment terms key (e.g. <code className="bg-muted px-1 py-0.5 rounded">0003</code> for 14 days 3%, 20/2%, 30 net) passed as <code className="bg-muted px-1 py-0.5 rounded">CustomerPaymentTerms</code> in the Sales Order payload.
+              </p>
+            </div>
           </div>
-          <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
-            If configured, this block code will be populated as the delivery and billing block reason at the Sales Order header to prevent automatic processing.
-          </p>
-        </div>
-
-        <hr className="border-border/60" />
-
-        {/* Pricing Condition for Gross Price */}
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase tracking-wider text-primary block">
-            Pricing Condition for Gross Price
-          </label>
-          <div className="relative max-w-sm">
-            <input
-              type="text"
-              placeholder="e.g. PPR0 or PR00"
-              value={pricingCondition}
-              onChange={(e) => setPricingCondition(e.target.value)}
-              className="px-4 h-11 w-full bg-background border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none transition-all font-medium"
-            />
+        ) : (
+          <div className="p-6 border border-dashed border-border rounded-xl text-center text-muted-foreground text-xs animate-in fade-in duration-300">
+            No configuration needed for Vendor Invoice defaults.
           </div>
-          <p className="text-[11px] text-muted-foreground leading-normal max-w-xl">
-            The condition type (e.g. <code className="bg-muted px-1 py-0.5 rounded">PPR0</code> or <code className="bg-muted px-1 py-0.5 rounded">PR00</code>) used when passing line-item unit prices nested under <code className="bg-muted px-1 py-0.5 rounded">to_PricingElement</code> in the Sales Order payload.
-          </p>
-        </div>
+        )}
       </div>
 
-      <div className="flex justify-end gap-3">
-        <button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex items-center gap-1.5 px-5 py-2.5 bg-primary text-primary-foreground text-xs font-bold rounded-xl hover:shadow-md transition-all active:scale-95 disabled:opacity-50"
-        >
-          <Save className="h-4 w-4" />
-          {isSaving ? "Saving Settings..." : "Save Sales Order configuration"}
-        </button>
-      </div>
+      {selectedContext === "Sales Order" && (
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={handleSave}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-5 py-2.5 bg-primary text-primary-foreground text-xs font-bold rounded-xl hover:shadow-md transition-all active:scale-95 disabled:opacity-50"
+          >
+            <Save className="h-4 w-4" />
+            {isSaving ? "Saving Settings..." : "Save Defaults configuration"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
