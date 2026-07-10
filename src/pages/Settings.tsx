@@ -42,6 +42,7 @@ const sidebarItems = [
   { id: "mappings", label: "Mapping Table", icon: Table },
   { id: "pricing", label: "Price Determination", icon: DollarSign },
   { id: "sales_order_context", label: "Sales Order Context", icon: ShoppingCart },
+  { id: "tokens", label: "Token Usage Logs", icon: Activity },
   { id: "roles", label: "Manage Roles", icon: Key },
   { id: "credits", label: "Manage AI Credits", icon: Zap },
   { id: "users", label: "User Management", icon: Users },
@@ -86,6 +87,7 @@ export default function SettingsPage() {
           {activeTab === "users" && <ManageUsers />}
           {activeTab === "pricing" && <PriceDeterminationSettings />}
           {activeTab === "sales_order_context" && <SalesOrderContextSettings />}
+          {activeTab === "tokens" && <TokenUsageLogs />}
         </div>
       </div>
     </div>
@@ -98,11 +100,16 @@ function AIPreferences() {
     openai: "",
     anthropic: "",
     gemini: "",
+    localllm: "",
+    mygollm: "",
+    mygollm_url: "",
   });
   const [models, setModels] = useState({
     openai: "gpt-4o",
     anthropic: "claude-3-5-sonnet-latest",
     gemini: "gemini-3.5-flash",
+    localllm: "gemma4:e4b",
+    mygollm: "mygo-llm",
   });
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
@@ -111,13 +118,15 @@ function AIPreferences() {
     openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
     anthropic: ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
     gemini: ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+    localllm: ["gemma4:e4b", "gemma:2b", "gemma:7b", "llama3", "llama3.1", "mistral"],
+    mygollm: ["mygo-llm"],
   });
   const [isLoadingModels, setIsLoadingModels] = useState<Record<string, boolean>>({});
 
   const fetchAvailableModels = async (provider: string, apiKeyOverride?: string) => {
     const keyName = provider === "Claude" ? "anthropic" : provider.toLowerCase();
     const apiKey = apiKeyOverride || keys[keyName as keyof typeof keys];
-    if (!apiKey) return;
+    if (!apiKey && provider !== "LocalLLM") return;
 
     setIsLoadingModels(prev => ({ ...prev, [keyName]: true }));
     try {
@@ -158,18 +167,25 @@ function AIPreferences() {
           openai: data.openai_api_key || "",
           anthropic: data.anthropic_api_key || "",
           gemini: data.gemini_api_key || "",
+          localllm: data.localllm_api_key || "",
+          mygollm: data.mygollm_api_key || "",
+          mygollm_url: data.mygollm_url || "http://ec2-34-224-26-117.compute-1.amazonaws.com",
         };
         setKeys(loadedKeys);
         setModels({
           openai: data.openai_model || "gpt-4o",
           anthropic: data.anthropic_model || "claude-3-5-sonnet-latest",
           gemini: data.gemini_model || "gemini-3.5-flash",
+          localllm: data.localllm_model || "gemma4:e4b",
+          mygollm: data.mygollm_model || "mygo-llm",
         });
 
         // Trigger dynamic model fetches if keys are configured
         if (loadedKeys.openai) fetchAvailableModels("OpenAI", loadedKeys.openai);
         if (loadedKeys.anthropic) fetchAvailableModels("Claude", loadedKeys.anthropic);
         if (loadedKeys.gemini) fetchAvailableModels("Gemini", loadedKeys.gemini);
+        fetchAvailableModels("LocalLLM", loadedKeys.localllm || "http://localhost:11434");
+        if (loadedKeys.mygollm) fetchAvailableModels("MygoLLM", loadedKeys.mygollm);
       })
       .catch(() => {
         toast.error("Failed to load settings data");
@@ -180,14 +196,18 @@ function AIPreferences() {
     setIsSaving(true);
     const stateKey = provider === "Claude" ? "anthropic" : provider.toLowerCase();
     try {
+      const payload: any = {
+        provider,
+        api_key: keys[stateKey as keyof typeof keys],
+        model: models[stateKey as keyof typeof models],
+      };
+      if (provider === "MygoLLM") {
+        payload.url = keys.mygollm_url;
+      }
       const res = await fetch(`${API_BASE}/settings/ai`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider,
-          api_key: keys[stateKey as keyof typeof keys],
-          model: models[stateKey as keyof typeof models],
-        }),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         toast.success(`${provider} preferences saved successfully`);
@@ -226,6 +246,20 @@ function AIPreferences() {
       color: "bg-blue-500",
       description: "gemini-3.5-flash - Multimodal",
       keyName: "gemini",
+    },
+    {
+      id: "LocalLLM",
+      label: "Local LLM (Ollama)",
+      color: "bg-purple-500",
+      description: "Local Ollama - Gemma / Llama",
+      keyName: "localllm",
+    },
+    {
+      id: "MygoLLM",
+      label: "Mygo LLM",
+      color: "bg-teal-500",
+      description: "Mygo Gateway LLM Service",
+      keyName: "mygollm",
     },
   ];
 
@@ -273,11 +307,11 @@ function AIPreferences() {
                       <div className="flex items-center gap-1.5 text-xs">
                         {hasKey ? (
                           <span className="text-emerald-500 font-semibold flex items-center gap-1">
-                            <CheckCircle2 className="h-3.5 w-3.5" /> Key set
+                            <CheckCircle2 className="h-3.5 w-3.5" /> {p.id === "LocalLLM" ? "Endpoint set" : "Key set"}
                           </span>
                         ) : (
                           <span className="text-muted-foreground flex items-center gap-1">
-                            <Lock className="h-3 w-3" /> No key set
+                            <Lock className="h-3 w-3" /> {p.id === "LocalLLM" ? "No endpoint set" : "No key set"}
                           </span>
                         )}
                       </div>
@@ -286,28 +320,53 @@ function AIPreferences() {
                   </div>
                 </div>
 
-                <div className="relative ml-8">
-                  <input
-                    type={visibility[p.id] ? "text" : "password"}
-                    value={keys[p.keyName as keyof typeof keys]}
-                    onChange={(e) => setKeys({ ...keys, [p.keyName]: e.target.value })}
-                    placeholder={`Enter ${p.label || p.id} API key`}
-                    className="w-full bg-background/50 border border-border h-11 px-4 pr-24 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
-                  />
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                    <button
-                      onClick={() => toggleVisibility(p.id)}
-                      className="p-2 text-muted-foreground hover:text-foreground hover:bg-background/80 rounded-md transition-colors"
-                    >
-                      {visibility[p.id] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                    <button
-                      onClick={() => handleSave(p.id)}
-                      disabled={isSaving || !keys[p.keyName as keyof typeof keys]}
-                      className="px-3 py-1.5 bg-primary text-primary-foreground text-xs font-bold rounded-md hover:bg-primary/90 disabled:opacity-50 transition-all flex items-center gap-1.5"
-                    >
-                      <Save className="h-3 w-3" /> Save Key
-                    </button>
+                <div className="ml-8 space-y-3">
+                  {p.id === "MygoLLM" && (
+                    <div>
+                      <label className="text-[10px] font-bold text-muted-foreground uppercase mb-1 block">
+                        Gateway URL
+                      </label>
+                      <input
+                        type="text"
+                        value={keys.mygollm_url}
+                        onChange={(e) => setKeys({ ...keys, mygollm_url: e.target.value })}
+                        placeholder="Enter Mygo Gateway URL (e.g. http://ec2-34-224-26-117.compute-1.amazonaws.com)"
+                        className="w-full bg-background/50 border border-border h-11 px-4 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
+                      />
+                    </div>
+                  )}
+                  <div>
+                    {p.id === "MygoLLM" && (
+                      <label className="text-[10px] font-bold text-muted-foreground uppercase mb-1 block">
+                        API Key
+                      </label>
+                    )}
+                    <div className="relative">
+                      <input
+                        type={p.id === "LocalLLM" ? "text" : (visibility[p.id] ? "text" : "password")}
+                        value={keys[p.keyName as keyof typeof keys]}
+                        onChange={(e) => setKeys({ ...keys, [p.keyName]: e.target.value })}
+                        placeholder={p.id === "LocalLLM" ? "Enter Ollama Endpoint URL (e.g. http://localhost:11434)" : `Enter ${p.label || p.id} API key`}
+                        className="w-full bg-background/50 border border-border h-11 px-4 pr-24 rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
+                      />
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                        {p.id !== "LocalLLM" && (
+                          <button
+                            onClick={() => toggleVisibility(p.id)}
+                            className="p-2 text-muted-foreground hover:text-foreground hover:bg-background/80 rounded-md transition-colors"
+                          >
+                            {visibility[p.id] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleSave(p.id)}
+                          disabled={isSaving || (!keys[p.keyName as keyof typeof keys] && p.id !== "LocalLLM")}
+                          className="px-3 py-1.5 bg-primary text-primary-foreground text-xs font-bold rounded-md hover:bg-primary/90 disabled:opacity-50 transition-all flex items-center gap-1.5"
+                        >
+                          <Save className="h-3 w-3" /> {p.id === "LocalLLM" ? "Save Endpoint" : (p.id === "MygoLLM" ? "Save Credentials" : "Save Key")}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -332,7 +391,7 @@ function AIPreferences() {
                         onClick={() => fetchAvailableModels(p.id)}
                         disabled={isLoadingModels[p.keyName] || isSaving}
                         className="p-2 border border-border bg-card hover:bg-muted text-muted-foreground hover:text-foreground rounded-md transition-all active:scale-[0.95] flex items-center justify-center h-9"
-                        title="Fetch latest available models for this key"
+                        title={p.id === "LocalLLM" ? "Scan Ollama models" : "Fetch latest available models for this key"}
                       >
                         <RefreshCw className={cn("h-4 w-4", isLoadingModels[p.keyName] && "animate-spin")} />
                       </button>
@@ -2245,6 +2304,119 @@ function SalesOrderContextSettings() {
           <Save className="h-4 w-4" />
           {isSaving ? "Saving Settings..." : "Save Sales Order configuration"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function TokenUsageLogs() {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchLogs = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/settings/token-usage`);
+      if (res.ok) {
+        const data = await res.json();
+        setLogs(data);
+      } else {
+        toast.error("Failed to fetch token usage logs");
+      }
+    } catch {
+      toast.error("Error loading token usage");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLogs();
+  }, []);
+
+  const totalInput = logs.reduce((sum, item) => sum + (item.promptTokens || 0), 0);
+  const totalOutput = logs.reduce((sum, item) => sum + (item.completionTokens || 0), 0);
+  const totalAll = logs.reduce((sum, item) => sum + (item.totalTokens || 0), 0);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-foreground">Token Usage Logs</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Historical overview of token consumption and processing duration by AI model requests.
+        </p>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="p-4 rounded-xl border border-border bg-card shadow-sm flex flex-col justify-between">
+          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Total Ingestions</span>
+          <span className="text-2xl font-bold text-foreground mt-2">{logs.length}</span>
+        </div>
+        <div className="p-4 rounded-xl border border-border bg-card shadow-sm flex flex-col justify-between">
+          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Input Tokens</span>
+          <span className="text-2xl font-bold text-foreground mt-2">{totalInput.toLocaleString()}</span>
+        </div>
+        <div className="p-4 rounded-xl border border-border bg-card shadow-sm flex flex-col justify-between">
+          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Output Tokens</span>
+          <span className="text-2xl font-bold text-foreground mt-2">{totalOutput.toLocaleString()}</span>
+        </div>
+        <div className="p-4 rounded-xl border border-border bg-card shadow-sm flex flex-col justify-between">
+          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Total Tokens</span>
+          <span className="text-2xl font-bold text-primary mt-2">{totalAll.toLocaleString()}</span>
+        </div>
+      </div>
+
+      {/* Logs Table */}
+      <div className="border border-border rounded-xl bg-card overflow-hidden shadow-sm">
+        {loading ? (
+          <div className="p-12 text-center text-sm text-muted-foreground animate-pulse">
+            Loading token usage history...
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="p-12 text-center text-sm text-muted-foreground">
+            No token usage history recorded yet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="bg-muted/50 border-b border-border text-xs font-bold text-muted-foreground uppercase">
+                  <th className="p-4">Document</th>
+                  <th className="p-4">Timestamp</th>
+                  <th className="p-4">Model</th>
+                  <th className="p-4 text-right">Input Tokens</th>
+                  <th className="p-4 text-right">Output Tokens</th>
+                  <th className="p-4 text-right">Total Tokens</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {logs.map((item) => (
+                  <tr key={item.id} className="hover:bg-muted/20 transition-colors">
+                    <td className="p-4 font-medium text-foreground truncate max-w-[200px]" title={item.docName}>
+                      {item.docName || "Unknown"}
+                    </td>
+                    <td className="p-4 text-muted-foreground text-xs">
+                      {new Date(item.timestamp).toLocaleString()}
+                    </td>
+                    <td className="p-4 text-foreground font-mono text-xs">
+                      {item.model}
+                    </td>
+                    <td className="p-4 text-right text-muted-foreground font-mono">
+                      {(item.promptTokens || 0).toLocaleString()}
+                    </td>
+                    <td className="p-4 text-right text-muted-foreground font-mono">
+                      {(item.completionTokens || 0).toLocaleString()}
+                    </td>
+                    <td className="p-4 text-right text-primary font-bold font-mono">
+                      {(item.totalTokens || 0).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,0 +1,56 @@
+[
+    {
+        "id": 1783649129249,
+        "docName": "test_mygo_llm.pdf",
+        "timestamp": "2026-07-10T02:05:29.249Z",
+        "model": "mygo-llm",
+        "promptTokens": 63,
+        "completionTokens": 202,
+        "totalTokens": 265
+    },
+    {
+        "id": 1783648817517,
+        "docName": "AAAZIQ5AAAA=_fax00106188.pdf",
+        "timestamp": "2026-07-10T02:00:17.517Z",
+        "model": "gemma4:e4b",
+        "promptTokens": 722,
+        "completionTokens": 266,
+        "totalTokens": 988
+    },
+    {
+        "id": 1783433008327,
+        "docName": "AAAZIQ44AAA=_Order voor Albyco Belgium AANHG 000.058.pdf",
+        "timestamp": "2026-07-07T14:03:28.327Z",
+        "model": "gemini-3.1-pro-preview",
+        "promptTokens": 1890,
+        "completionTokens": 425,
+        "totalTokens": 5221
+    },
+    {
+        "id": 1783432958429,
+        "docName": "AAAZIQ43AAA=_fax00106188.pdf",
+        "timestamp": "2026-07-07T14:02:38.429Z",
+        "model": "gemini-3.1-pro-preview",
+        "promptTokens": 2422,
+        "completionTokens": 3151,
+        "totalTokens": 10281
+    },
+    {
+        "id": 1783421061987,
+        "docName": "AAAZIQ40AAA=_4504948792.pdf",
+        "timestamp": "2026-07-07T10:44:21.987Z",
+        "model": "gemini-3.1-pro-preview",
+        "promptTokens": 4018,
+        "completionTokens": 5098,
+        "totalTokens": 14984
+    },
+    {
+        "id": 1783421019487,
+        "docName": "AAAZIQ40AAA=_4504948792.pdf",
+        "timestamp": "2026-07-07T10:43:39.487Z",
+        "model": "gemini-3.1-pro-preview",
+        "promptTokens": 4018,
+        "completionTokens": 5097,
+        "totalTokens": 18681
+    }
+]

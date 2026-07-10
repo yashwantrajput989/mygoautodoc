@@ -16,6 +16,10 @@ import * as msal from '@azure/msal-node';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import WordExtractor from 'word-extractor';
+import axios from 'axios';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import Tesseract from 'tesseract.js';
+import mammoth from 'mammoth';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1269,7 +1273,7 @@ app.get('/api/settings', async (req, res) => {
             password: e.password ? '********' : ''
         }));
     }
-    for (const key of ['openai_api_key', 'anthropic_api_key', 'gemini_api_key']) {
+    for (const key of ['openai_api_key', 'anthropic_api_key', 'gemini_api_key', 'mygollm_api_key']) {
         if (settings[key]) settings[key] = '********';
     }
     res.json(settings);
@@ -1296,7 +1300,7 @@ app.post('/api/settings/email', async (req, res) => {
 });
 
 app.post('/api/settings/ai', async (req, res) => {
-    const { provider, api_key, model } = req.body;
+    const { provider, api_key, model, url } = req.body;
     const current = await getSettings();
 
     let providerKey = provider.toLowerCase();
@@ -1309,6 +1313,9 @@ app.post('/api/settings/ai', async (req, res) => {
     current.active_provider = provider;
     if (model) {
         current[`${providerKey}_model`] = model;
+    }
+    if (providerKey === 'mygollm' && url !== undefined) {
+        current.mygollm_url = url;
     }
     await saveSettings(current);
     res.json({ message: `${provider} settings updated successfully` });
@@ -1328,7 +1335,7 @@ app.post('/api/settings/ai/models', async (req, res) => {
         apiKey = settings[`${providerLower}_api_key`];
     }
 
-    if (!apiKey) {
+    if (!apiKey && provider !== "LocalLLM") {
         return res.status(400).json({ error: `API Key for ${provider} is not configured` });
     }
 
@@ -1375,6 +1382,18 @@ app.post('/api/settings/ai/models', async (req, res) => {
             if (data.data && Array.isArray(data.data)) {
                 modelsList = data.data.map(m => m.id);
             }
+        } else if (provider === "LocalLLM") {
+            const url = apiKey || "http://localhost:11434";
+            const response = await fetch(`${url}/api/tags`);
+            if (!response.ok) {
+                throw new Error(`Ollama API returned status ${response.status}`);
+            }
+            const data = await response.json();
+            if (data.models && Array.isArray(data.models)) {
+                modelsList = data.models.map(m => m.name);
+            }
+        } else if (provider === "MygoLLM") {
+            modelsList = ["mygo-llm"];
         }
 
         // Fallbacks if list is empty
@@ -1385,6 +1404,10 @@ app.post('/api/settings/ai/models', async (req, res) => {
                 modelsList = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"];
             } else if (provider === "Claude") {
                 modelsList = ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"];
+            } else if (provider === "LocalLLM") {
+                modelsList = ["gemma4:e4b", "gemma:2b", "gemma:7b", "llama3", "llama3.1", "mistral"];
+            } else if (provider === "MygoLLM") {
+                modelsList = ["mygo-llm"];
             }
         }
 
@@ -1400,8 +1423,21 @@ app.post('/api/settings/ai/models', async (req, res) => {
             modelsList = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"];
         } else if (provider === "Claude") {
             modelsList = ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"];
+        } else if (provider === "LocalLLM") {
+            modelsList = ["gemma4:e4b", "gemma:2b", "gemma:7b", "llama3", "llama3.1", "mistral"];
+        } else if (provider === "MygoLLM") {
+            modelsList = ["mygo-llm"];
         }
         res.json({ success: false, message: err.message, models: modelsList });
+    }
+});
+
+app.get('/api/settings/token-usage', async (req, res) => {
+    try {
+        const logs = await getTokenUsage();
+        res.json(logs);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -2146,7 +2182,8 @@ app.get('/api/documents/:id', async (req, res) => {
             is_pending: isPending,
             extension: ext,
             filename: `${id}${ext}`,
-            extracted_text: extractedText
+            extracted_text: extractedText,
+            parse_duration_seconds: docData.parse_duration_seconds
         });
     } catch (err) {
         console.error(`Error fetching document details for ${req.params.id}:`, err.message);
@@ -4251,6 +4288,142 @@ function parseAIJSONResponse(text) {
     }
 }
 
+// Helper to normalize raw date formats to YYYY-MM-DD standard format
+function normalizeDateToYYYYMMDD(dateStr) {
+    if (!dateStr || typeof dateStr !== 'string') return '';
+    
+    const cleanStr = dateStr.trim().replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
+    if (!cleanStr) return '';
+    
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cleanStr)) {
+        return cleanStr;
+    }
+
+    const parsed = Date.parse(cleanStr);
+    if (!isNaN(parsed)) {
+        try {
+            return new Date(parsed).toISOString().slice(0, 10);
+        } catch (e) {
+            // ignore
+        }
+    }
+    
+    const matchDmy = cleanStr.match(/^(\d{1,2})[\.\/-](\d{1,2})[\.\/-](\d{4})$/);
+    if (matchDmy) {
+        const day = matchDmy[1].padStart(2, '0');
+        const month = matchDmy[2].padStart(2, '0');
+        const year = matchDmy[3];
+        if (parseInt(month) > 12) {
+            return `${year}-${day}-${month}`;
+        }
+        return `${year}-${month}-${day}`;
+    }
+
+    const matchYmd = cleanStr.match(/^(\d{4})[\.\/-](\d{1,2})[\.\/-](\d{1,2})$/);
+    if (matchYmd) {
+        const year = matchYmd[1];
+        const month = matchYmd[2].padStart(2, '0');
+        const day = matchYmd[3].padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+    
+    return cleanStr;
+}
+
+// Helper to clean price and prevent confusion with material numbers
+function cleanAndValidatePrice(priceStr) {
+    if (priceStr === null || priceStr === undefined) return '0.00';
+    const cleanStr = String(priceStr).trim();
+    if (!cleanStr) return '0.00';
+    
+    const letters = cleanStr.replace(/[^a-zA-Z]/g, '');
+    if (letters.length > 3) {
+        return '0.00';
+    }
+    
+    const match = cleanStr.replace(/,/g, '').match(/-?\d+\.?\d*/);
+    if (match) {
+        const val = parseFloat(match[0]);
+        return isNaN(val) ? '0.00' : val.toFixed(2);
+    }
+    return '0.00';
+}
+
+const TOKEN_USAGE_PATH = path.join(__dirname, 'token_usage.json');
+
+async function getTokenUsage() {
+    try {
+        if (!fs.existsSync(TOKEN_USAGE_PATH)) {
+            return [];
+        }
+        const data = fs.readFileSync(TOKEN_USAGE_PATH, 'utf8');
+        return JSON.parse(data);
+    } catch (err) {
+        console.error('Error reading token_usage.json:', err);
+        return [];
+    }
+}
+
+async function logTokenUsage(docName, model, promptTokens, completionTokens, totalTokens) {
+    try {
+        let logs = [];
+        if (fs.existsSync(TOKEN_USAGE_PATH)) {
+            const raw = fs.readFileSync(TOKEN_USAGE_PATH, 'utf8');
+            try {
+                logs = JSON.parse(raw);
+            } catch {
+                logs = [];
+            }
+        }
+        const newEntry = {
+            id: Date.now(),
+            docName,
+            timestamp: new Date().toISOString(),
+            model,
+            promptTokens: promptTokens || 0,
+            completionTokens: completionTokens || 0,
+            totalTokens: totalTokens || 0
+        };
+        logs.unshift(newEntry);
+        const limited = logs.slice(0, 100);
+        fs.writeFileSync(TOKEN_USAGE_PATH, JSON.stringify(limited, null, 4));
+        console.log(`📊 [AI Token Log] Saved token usage for ${docName}: Input=${promptTokens}, Output=${completionTokens}, Total=${totalTokens}`);
+    } catch (err) {
+        console.error('Error logging token usage:', err);
+    }
+}
+
+// Helper to extract text from a file buffer
+async function extractTextFromFile(fileData, ext) {
+    const supportedImages = ['.png', '.jpg', '.jpeg', '.webp', '.tiff'];
+    if (ext === '.txt') {
+        return fileData.toString('utf-8');
+    } else if (ext === '.pdf') {
+        const uint8Array = new Uint8Array(fileData);
+        const loadingTask = pdfjsLib.getDocument({
+            data: uint8Array,
+            useSystemFonts: true
+        });
+        const doc = await loadingTask.promise;
+        let fullText = "";
+        for (let i = 1; i <= doc.numPages; i++) {
+            const page = await doc.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(" ");
+            fullText += pageText + "\n";
+        }
+        return fullText;
+    } else if (ext === '.docx' || ext === '.doc') {
+        const extractor = new WordExtractor();
+        const doc = await extractor.extract(fileData);
+        return doc.getBody();
+    } else if (supportedImages.includes(ext)) {
+        const { data: { text } } = await Tesseract.recognize(fileData, 'eng');
+        return text;
+    }
+    throw new Error(`Unsupported local text extraction format: ${ext}`);
+}
+
 // ─── PHASE 2 — AI ANALYSIS ──────────────────────────────────────
 
 async function runPhase2() {
@@ -4262,6 +4435,10 @@ async function runPhase2() {
     if (!apiKey || apiKey === '********') {
         if (activeProvider === 'gemini') {
             apiKey = GEMINI_KEY;
+        } else if (activeProvider === 'localllm') {
+            apiKey = 'http://localhost:11434';
+        } else if (activeProvider === 'mygollm') {
+            apiKey = process.env.MYGO_LLM_KEY || null;
         } else {
             apiKey = null;
         }
@@ -4269,9 +4446,12 @@ async function runPhase2() {
 
     const customPrompt = settings.custom_prompt || PROMPT_ANALYSIS;
 
-    if (!apiKey) return `Phase 2 error: Missing API key for ${settings.active_provider || 'Gemini'}`;
+    if (!apiKey && activeProvider !== 'localllm') return `Phase 2 error: Missing API key for ${settings.active_provider || 'Gemini'}`;
 
-    const client = new GoogleGenAI({ apiKey });
+    let client = null;
+    if (activeProvider !== 'localllm' && activeProvider !== 'mygollm') {
+        client = new GoogleGenAI({ apiKey });
+    }
 
     let modelId = settings[`${activeProvider}_model`];
     if (!modelId) {
@@ -4281,6 +4461,10 @@ async function runPhase2() {
             modelId = 'gpt-4o';
         } else if (activeProvider === 'anthropic') {
             modelId = 'claude-3-5-sonnet-latest';
+        } else if (activeProvider === 'localllm') {
+            modelId = 'gemma4:e4b';
+        } else if (activeProvider === 'mygollm') {
+            modelId = 'mygo-llm';
         }
     }
 
@@ -4319,95 +4503,364 @@ async function runPhase2() {
                     } catch { /* skip */ }
                 }
 
+                let parseDurationSec = "0.0";
                 try {
-                    let response;
-                    if (isBodyOnly) {
-                        console.log(`🧠 [AI] Parsing body-only email contents using Gemini...`);
-                        const emailContent = `Analyze this email body for SAP S/4HANA integration and extract the document fields. Here is the email content:\n\nSubject: ${emailMeta.subject}\nFrom: ${emailMeta.from}\nDate: ${emailMeta.received_at}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body:\n${emailMeta.body || ''}`;
+                    const startParseTime = Date.now();
+                    let responseText = "";
+                    if (activeProvider === 'localllm') {
+                        let fileText = "";
+                        if (isBodyOnly) {
+                            fileText = `Analyze this email body for SAP S/4HANA integration and extract the document fields. Here is the email content:\n\nSubject: ${emailMeta.subject}\nFrom: ${emailMeta.from}\nDate: ${emailMeta.received_at}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body:\n${emailMeta.body || ''}`;
+                        } else {
+                            const ext = path.extname(fname).toLowerCase();
+                            const rawExtText = await extractTextFromFile(fileData, ext);
+                            fileText = `Analyze this document content for SAP S/4HANA integration. Document name: "${fname}"\n\nEmail Context:\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}\n\nDocument Content:\n${rawExtText || '(Could not extract text content)'}`;
+                        }
 
-                        response = await client.models.generateContent({
+                        let targetPrompt = customPrompt;
+                        // If it is the default prompt, replace it with a clean schema instructions set optimized for local LLMs
+                        if (customPrompt === PROMPT_ANALYSIS) {
+                            targetPrompt = `You are a strict JSON document extraction assistant. You analyze raw text from invoices or sales orders, extract relevant fields, and return them in structured JSON.
+You must respond with ONLY a valid JSON object. Do NOT wrap the output in markdown code blocks. Do NOT output any prefix, conversational explanations, or suffix.
+Your output must match exactly the following JSON structure. All fields should be string, number or boolean values.
+
+JSON structure:
+{
+  "is_legit_invoice": true,
+  "total_pages_detected": 1,
+  "header": {
+    "context": "Sales Order" or "Vendor Invoice",
+    "customer_name": "",
+    "sold_to_party_number": "",
+    "ship_to_party_number": "",
+    "requested_date": "",
+    "order_received_date": "",
+    "customer_po_number": "",
+    "payment_terms": "",
+    "inco_terms": "",
+    "sales_organization": "",
+    "distribution_channel": "",
+    "division": "",
+    "supplier_name": "",
+    "supplier_number": "",
+    "invoice_date": "",
+    "invoice_reference": "",
+    "po_number": "",
+    "po_type": "",
+    "company_code": ""
+  },
+  "totals": {
+    "currency": "",
+    "total_taxes": "",
+    "total_amount": ""
+  },
+  "line_items": [
+    {
+      "item_number": "",
+      "customer_material_number": "",
+      "supplier_material_number": "",
+      "material_description": "",
+      "sap_material_number": "",
+      "sap_material_description": "",
+      "quantity": "",
+      "unit_of_measure": "",
+      "unit_price": "",
+      "line_amount": "",
+      "line_tax": ""
+    }
+  ],
+  "exceptions": ""
+}
+
+Instructions:
+- Under "header", "context" must be exactly "Sales Order" or "Vendor Invoice".
+- "is_legit_invoice" must be set to true if the document is a valid Sales Order OR a valid Vendor Invoice. Set to false ONLY if the document is spam, junk, generic correspondence, or completely unrelated.
+- If a field is not present in the text, leave it as an empty string "".
+- Do not make up any values. Only extract values present in the text.`;
+                        }
+
+                        console.log(`🧠 [Local LLM] Sending prompt to Ollama URL: ${apiKey}/api/generate for model ${modelId}`);
+                        const ollamaRes = await axios.post(`${apiKey}/api/generate`, {
                             model: modelId,
-                            contents: [
-                                customPrompt,
-                                emailContent
-                            ],
-                            config: { responseMimeType: 'application/json' },
-                        });
-                    } else {
-                        const ext = path.extname(fname).toLowerCase();
-                        const supportedImages = ['.png', '.jpg', '.jpeg', '.webp', '.tiff'];
-
-                        if (ext === '.pdf') {
-                            const base64Data = fileData.toString('base64');
-                            response = await client.models.generateContent({
-                                model: modelId,
-                                contents: [
-                                    customPrompt,
-                                    { inlineData: { mimeType: 'application/pdf', data: base64Data } },
-                                ],
-                                config: { responseMimeType: 'application/json' },
-                            });
-                        } else if (supportedImages.includes(ext)) {
-                            const base64Data = fileData.toString('base64');
-                            const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.slice(1)}`;
-                            response = await client.models.generateContent({
-                                model: modelId,
-                                contents: [
-                                    customPrompt,
-                                    { inlineData: { mimeType, data: base64Data } },
-                                ],
-                                config: { responseMimeType: 'application/json' },
-                            });
-                        } else if (ext === '.txt') {
-                            const textContent = fileData.toString('utf-8');
-                            const fullContent = `Analyze this text file content for SAP S/4HANA integration. Document name: ${fname}\n\nFile Content:\n${textContent}`;
-                            response = await client.models.generateContent({
-                                model: modelId,
-                                contents: [
-                                    customPrompt,
-                                    fullContent
-                                ],
-                                config: { responseMimeType: 'application/json' },
-                            });
-                        } else if (ext === '.docx' || ext === '.doc') {
-                            let extractedText = '';
-                            try {
-                                const extractor = new WordExtractor();
-                                const doc = await extractor.extract(fileData);
-                                extractedText = doc.getBody();
-                                console.log(`🧠 [AI] Successfully extracted Word document text for ${fname} (${extractedText.length} chars)`);
-                            } catch (extractErr) {
-                                console.error(`⚠️ Failed to extract Word text for ${fname}:`, extractErr.message);
+                            prompt: `${targetPrompt}\n\nDocument Raw Text for Analysis:\n"""\n${fileText}\n"""`,
+                            format: "json",
+                            stream: false,
+                            options: {
+                                temperature: 0.1,
+                                num_ctx: 16384, // Max context size for local model
+                                num_predict: 4096, // Maximum generation token size
                             }
+                        }, { timeout: 600000 }); // Max time limit: 10 minutes
 
-                            const fullContent = `Analyze this Word document content for SAP S/4HANA integration. Document name: "${fname}"\n\nEmail Context:\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}\n\nWord Document Content:\n${extractedText || '(Could not extract text content)'}`;
+                        responseText = ollamaRes.data.response || "";
+                        try {
+                            const promptTokens = ollamaRes.data.prompt_eval_count || 0;
+                            const completionTokens = ollamaRes.data.eval_count || 0;
+                            const totalTokens = promptTokens + completionTokens;
+                            await logTokenUsage(fname, modelId, promptTokens, completionTokens, totalTokens);
+                        } catch (tokenErr) {
+                            console.error("⚠️ Failed to log local LLM token usage:", tokenErr.message);
+                        }
+                    } else if (activeProvider === 'mygollm') {
+                        let fileText = "";
+                        if (isBodyOnly) {
+                            fileText = `Analyze this email body for SAP S/4HANA integration and extract the document fields. Here is the email content:\n\nSubject: ${emailMeta.subject}\nFrom: ${emailMeta.from}\nDate: ${emailMeta.received_at}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body:\n${emailMeta.body || ''}`;
+                        } else {
+                            const ext = path.extname(fname).toLowerCase();
+                            const rawExtText = await extractTextFromFile(fileData, ext);
+                            fileText = `Analyze this document content for SAP S/4HANA integration. Document name: "${fname}"\n\nEmail Context:\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}\n\nDocument Content:\n${rawExtText || '(Could not extract text content)'}`;
+                        }
+
+                        let targetPrompt = customPrompt;
+                        // If it is the default prompt, replace it with a clean schema instructions set optimized for local LLMs
+                        if (customPrompt === PROMPT_ANALYSIS) {
+                            targetPrompt = `You are a strict JSON document extraction assistant. You analyze raw text from invoices or sales orders, extract relevant fields, and return them in structured JSON.
+You must respond with ONLY a valid JSON object. Do NOT wrap the output in markdown code blocks. Do NOT output any prefix, conversational explanations, or suffix.
+Your output must match exactly the following JSON structure. All fields should be string, number or boolean values.
+
+JSON structure:
+{
+  "is_legit_invoice": true,
+  "total_pages_detected": 1,
+  "header": {
+    "context": "Sales Order" or "Vendor Invoice",
+    "customer_name": "",
+    "sold_to_party_number": "",
+    "ship_to_party_number": "",
+    "requested_date": "",
+    "order_received_date": "",
+    "customer_po_number": "",
+    "payment_terms": "",
+    "inco_terms": "",
+    "sales_organization": "",
+    "distribution_channel": "",
+    "division": "",
+    "supplier_name": "",
+    "supplier_number": "",
+    "invoice_date": "",
+    "invoice_reference": "",
+    "po_number": "",
+    "po_type": "",
+    "company_code": ""
+  },
+  "totals": {
+    "currency": "",
+    "total_taxes": "",
+    "total_amount": ""
+  },
+  "line_items": [
+    {
+      "item_number": "",
+      "customer_material_number": "",
+      "supplier_material_number": "",
+      "material_description": "",
+      "sap_material_number": "",
+      "sap_material_description": "",
+      "quantity": "",
+      "unit_of_measure": "",
+      "unit_price": "",
+      "line_amount": "",
+      "line_tax": ""
+    }
+  ],
+  "exceptions": ""
+}
+
+Instructions:
+- Under "header", "context" must be exactly "Sales Order" or "Vendor Invoice".
+- "is_legit_invoice" must be set to true if the document is a valid Sales Order OR a valid Vendor Invoice. Set to false ONLY if the document is spam, junk, generic correspondence, or completely unrelated.
+- If a field is not present in the text, leave it as an empty string "".
+- Do not make up any values. Only extract values present in the text.`;
+                        }
+
+                        const gatewayUrl = settings.mygollm_url || 'http://ec2-34-224-26-117.compute-1.amazonaws.com';
+                        console.log(`🧠 [Mygo LLM] Sending prompt to Mygo Gateway URL: ${gatewayUrl}/api/generate`);
+                        const mygoRes = await axios.post(`${gatewayUrl}/api/generate`, {
+                            prompt: `Document Raw Text for Analysis:\n"""\n${fileText}\n"""`,
+                            system_prompt: targetPrompt,
+                            temperature: 0.1,
+                            json_mode: true
+                        }, {
+                            headers: {
+                                "Content-Type": "application/json",
+                                "X-API-Key": apiKey
+                            },
+                            timeout: 600000
+                        });
+
+                        responseText = mygoRes.data.output || "";
+                        try {
+                            const promptTokens = Math.ceil(fileText.length / 4);
+                            const completionTokens = Math.ceil(responseText.length / 4);
+                            const totalTokens = promptTokens + completionTokens;
+                            await logTokenUsage(fname, modelId, promptTokens, completionTokens, totalTokens);
+                        } catch (tokenErr) {
+                            console.error("⚠️ Failed to log Mygo LLM token usage:", tokenErr.message);
+                        }
+                    } else {
+                        let response;
+                        if (isBodyOnly) {
+                            console.log(`🧠 [AI] Parsing body-only email contents using Gemini...`);
+                            const emailContent = `Analyze this email body for SAP S/4HANA integration and extract the document fields. Here is the email content:\n\nSubject: ${emailMeta.subject}\nFrom: ${emailMeta.from}\nDate: ${emailMeta.received_at}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body:\n${emailMeta.body || ''}`;
+
                             response = await client.models.generateContent({
                                 model: modelId,
                                 contents: [
                                     customPrompt,
-                                    fullContent
+                                    emailContent
                                 ],
                                 config: { responseMimeType: 'application/json' },
                             });
                         } else {
-                            // Office Documents (.xlsx, .xls, .pptx, .ppt)
-                            // Treat safely by using email body, metadata and filename to perform contextual parse!
-                            const docDescription = `Analyze this document for SAP S/4HANA integration. The document is a Microsoft Office file: "${fname}". Since it is a binary office file, perform a contextual analysis based on the email details:\n\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}`;
-                            response = await client.models.generateContent({
-                                model: modelId,
-                                contents: [
-                                    customPrompt,
-                                    docDescription
-                                ],
-                                config: { responseMimeType: 'application/json' },
-                            });
+                            const ext = path.extname(fname).toLowerCase();
+                            const supportedImages = ['.png', '.jpg', '.jpeg', '.webp', '.tiff'];
+
+                            if (ext === '.pdf') {
+                                const base64Data = fileData.toString('base64');
+                                response = await client.models.generateContent({
+                                    model: modelId,
+                                    contents: [
+                                        customPrompt,
+                                        { inlineData: { mimeType: 'application/pdf', data: base64Data } },
+                                    ],
+                                    config: { responseMimeType: 'application/json' },
+                                });
+                            } else if (supportedImages.includes(ext)) {
+                                const base64Data = fileData.toString('base64');
+                                const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.slice(1)}`;
+                                response = await client.models.generateContent({
+                                    model: modelId,
+                                    contents: [
+                                        customPrompt,
+                                        { inlineData: { mimeType, data: base64Data } },
+                                    ],
+                                    config: { responseMimeType: 'application/json' },
+                                });
+                            } else if (ext === '.txt') {
+                                const textContent = fileData.toString('utf-8');
+                                const fullContent = `Analyze this text file content for SAP S/4HANA integration. Document name: ${fname}\n\nFile Content:\n${textContent}`;
+                                response = await client.models.generateContent({
+                                    model: modelId,
+                                    contents: [
+                                        customPrompt,
+                                        fullContent
+                                    ],
+                                    config: { responseMimeType: 'application/json' },
+                                });
+                            } else if (ext === '.docx' || ext === '.doc') {
+                                let extractedText = '';
+                                try {
+                                    const extractor = new WordExtractor();
+                                    const doc = await extractor.extract(fileData);
+                                    extractedText = doc.getBody();
+                                    console.log(`🧠 [AI] Successfully extracted Word document text for ${fname} (${extractedText.length} chars)`);
+                                } catch (extractErr) {
+                                    console.error(`⚠️ Failed to extract Word text for ${fname}:`, extractErr.message);
+                                }
+
+                                const fullContent = `Analyze this Word document content for SAP S/4HANA integration. Document name: "${fname}"\n\nEmail Context:\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}\n\nWord Document Content:\n${extractedText || '(Could not extract text content)'}`;
+                                response = await client.models.generateContent({
+                                    model: modelId,
+                                    contents: [
+                                        customPrompt,
+                                        fullContent
+                                    ],
+                                    config: { responseMimeType: 'application/json' },
+                                });
+                            } else {
+                                // Office Documents (.xlsx, .xls, .pptx, .ppt)
+                                // Treat safely by using email body, metadata and filename to perform contextual parse!
+                                const docDescription = `Analyze this document for SAP S/4HANA integration. The document is a Microsoft Office file: "${fname}". Since it is a binary office file, perform a contextual analysis based on the email details:\n\nSubject: ${emailMeta.subject || ''}\nFrom: ${emailMeta.from || ''}\nDate: ${emailMeta.received_at || ''}\nExpected Document Type: ${emailMeta.expected_doc_type || 'Invoice'}\nDomain: ${emailMeta.domain || ''}\nCustomer Name: ${emailMeta.customer_name || ''}\nCustomer Address: ${emailMeta.customer_address || ''}\n\nEmail Body Text:\n${emailMeta.body || ''}`;
+                                response = await client.models.generateContent({
+                                    model: modelId,
+                                    contents: [
+                                        customPrompt,
+                                        docDescription
+                                    ],
+                                    config: { responseMimeType: 'application/json' },
+                                });
+                            }
+                        }
+                        responseText = response.text || "";
+                        try {
+                            if (response && response.usageMetadata) {
+                                const promptTokens = response.usageMetadata.promptTokenCount || 0;
+                                const completionTokens = response.usageMetadata.candidatesTokenCount || 0;
+                                const totalTokens = response.usageMetadata.totalTokenCount || 0;
+                                await logTokenUsage(fname, modelId, promptTokens, completionTokens, totalTokens);
+                            }
+                        } catch (tokenErr) {
+                            console.error("⚠️ Failed to log cloud LLM token usage:", tokenErr.message);
                         }
                     }
 
-                    const aiData = parseAIJSONResponse(response.text);
-                    const isLegit = aiData.is_legit_invoice === true ||
+                    const durationMs = Date.now() - startParseTime;
+                    parseDurationSec = (durationMs / 1000).toFixed(1);
+
+                    const aiData = parseAIJSONResponse(responseText);
+                    if (aiData) {
+                        aiData.parse_duration_seconds = parseDurationSec;
+                    }
+
+                    // Post-processing, normalization and cleaning for local LLM hallucinations
+                    if (aiData) {
+                        // 1. Normalize dates in header to YYYY-MM-DD
+                        const dateFields = ['requested_date', 'order_received_date', 'invoice_date', 'po_date'];
+                        if (aiData.header) {
+                            for (const field of dateFields) {
+                                if (aiData.header[field]) {
+                                    aiData.header[field] = normalizeDateToYYYYMMDD(aiData.header[field]);
+                                }
+                            }
+                        }
+
+                        // 2. Clean line items and resolve price/material confusion
+                        if (aiData.line_items && Array.isArray(aiData.line_items)) {
+                            aiData.line_items = aiData.line_items.map(item => {
+                                const rawPrice = item.unit_price || item.price || '';
+                                const rawAmount = item.line_amount || item.amount || '';
+                                
+                                const cleanedPrice = cleanAndValidatePrice(rawPrice);
+                                const cleanedAmount = cleanAndValidatePrice(rawAmount);
+
+                                // If the model confused price with material number (e.g. alphanumeric material code ended up in price)
+                                const lettersInPrice = String(rawPrice).replace(/[^a-zA-Z]/g, '');
+                                if (lettersInPrice.length > 3 && !item.customer_material_number) {
+                                    item.customer_material_number = String(rawPrice).trim();
+                                }
+                                
+                                item.price = cleanedPrice;
+                                item.unit_price = cleanedPrice;
+                                item.amount = cleanedAmount;
+                                item.line_amount = cleanedAmount;
+
+                                if (item.tax) {
+                                    item.tax = cleanAndValidatePrice(item.tax);
+                                    item.line_tax = item.tax;
+                                }
+
+                                return item;
+                            });
+                        }
+
+                        // 3. Robust checks and normalizations for Local LLMs context
+                        if (aiData.header) {
+                            const contextLower = (aiData.header.context || '').toLowerCase();
+                            if (contextLower.includes('sales') || contextLower.includes('order')) {
+                                aiData.header.context = 'Sales Order';
+                            } else if (contextLower.includes('invoice')) {
+                                aiData.header.context = 'Vendor Invoice';
+                            }
+                        }
+                    }
+
+                    // Force legitimacy check to true for Local LLMs as any document processed is intended for ingestion
+                    const isLegit = (activeProvider === 'localllm' || activeProvider === 'mygollm') ? true : (
+                        aiData.is_legit_invoice === true ||
+                        aiData.is_legit_invoice === 'true' ||
                         aiData.header?.context === 'Sales Order' ||
-                        aiData.header?.context === 'Vendor Invoice';
+                        aiData.header?.context === 'Vendor Invoice'
+                    );
 
                     // Apply Business Partner mapping from settings
                     if (emailMeta && emailMeta.from) {
@@ -4470,6 +4923,7 @@ async function runPhase2() {
                             human_readable_id: getHumanReadableId(baseName),
                             is_legit_invoice: false,
                             status: 'failed_parsing',
+                            parse_duration_seconds: parseDurationSec,
                             error: 'AI did not recognize this as a legitimate invoice or sales order.',
                             header: {
                                 context: emailMeta?.expected_doc_type || 'Unknown',
@@ -4501,6 +4955,7 @@ async function runPhase2() {
                         human_readable_id: getHumanReadableId(baseName),
                         is_legit_invoice: false,
                         status: 'failed_parsing',
+                        parse_duration_seconds: parseDurationSec,
                         error: errMsg,
                         header: {
                             context: emailMeta?.expected_doc_type || 'Unknown',

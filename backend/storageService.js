@@ -55,35 +55,51 @@ class StorageService {
             const s3Config = {
                 region: AWS_REGION
             };
-            // Optional: If running locally but testing S3, credentials might be loaded from env or AWS shared file.
-            // If they are explicitly in env, SDK picks them up automatically.
             this.s3 = new S3Client(s3Config);
             this.bucket = AWS_S3_BUCKET;
         }
     }
 
     /**
-     * Initializes folders locally.
+     * Helper to verify local directories exist
+     */
+    ensureLocalDirs() {
+        const dirs = [
+            CATEGORY_MAP_LOCAL.downloads,
+            CATEGORY_MAP_LOCAL.metadata,
+            CATEGORY_MAP_LOCAL.sap_docs,
+            CATEGORY_MAP_LOCAL.sap_json,
+            CATEGORY_MAP_LOCAL.archive_junk,
+            CATEGORY_MAP_LOCAL.trash_docs,
+            CATEGORY_MAP_LOCAL.trash_json
+        ];
+        for (const d of dirs) {
+            if (!fs.existsSync(d)) {
+                fs.mkdirSync(d, { recursive: true });
+            }
+        }
+    }
+
+    /**
+     * Initializes folders locally or tests S3
      */
     init() {
         if (this.type === 'local') {
-            const dirs = [
-                CATEGORY_MAP_LOCAL.downloads,
-                CATEGORY_MAP_LOCAL.metadata,
-                CATEGORY_MAP_LOCAL.sap_docs,
-                CATEGORY_MAP_LOCAL.sap_json,
-                CATEGORY_MAP_LOCAL.archive_junk,
-                CATEGORY_MAP_LOCAL.trash_docs,
-                CATEGORY_MAP_LOCAL.trash_json
-            ];
-            for (const d of dirs) {
-                if (!fs.existsSync(d)) {
-                    fs.mkdirSync(d, { recursive: true });
-                }
-            }
+            this.ensureLocalDirs();
             console.log('📂 [Storage] Local directories verified/created');
         } else {
             console.log(`☁️ [Storage] S3 Bucket configured: ${this.bucket}`);
+            // Check S3 availability asynchronously
+            this.s3.send(new ListObjectsV2Command({
+                Bucket: this.bucket,
+                MaxKeys: 1
+            })).then(() => {
+                console.log('☁️ [Storage] S3 connection verified successfully.');
+            }).catch((err) => {
+                console.warn(`⚠️ [Storage] S3 verification failed (${err.message}). Falling back to LOCAL storage mode.`);
+                this.type = 'local';
+                this.ensureLocalDirs();
+            });
         }
     }
 
@@ -118,12 +134,20 @@ class StorageService {
             const body = typeof content === 'string' ? Buffer.from(content) : content;
             const contentType = isJson ? 'application/json' : 'application/pdf';
             
-            await this.s3.send(new PutObjectCommand({
-                Bucket: this.bucket,
-                Key: key,
-                Body: body,
-                ContentType: contentType
-            }));
+            try {
+                await this.s3.send(new PutObjectCommand({
+                    Bucket: this.bucket,
+                    Key: key,
+                    Body: body,
+                    ContentType: contentType
+                }));
+            } catch (err) {
+                console.warn(`⚠️ [Storage] S3 write failed (${err.message}). Falling back to LOCAL storage.`);
+                this.type = 'local';
+                this.ensureLocalDirs();
+                const filePath = this._resolve(category, filename);
+                fs.writeFileSync(filePath, content);
+            }
         }
     }
 
@@ -160,6 +184,12 @@ class StorageService {
                 if (err.name === 'NoSuchKey' && isJson) {
                     return null;
                 }
+                if (err.name !== 'NoSuchKey') {
+                    console.warn(`⚠️ [Storage] S3 read failed (${err.message}). Falling back to LOCAL storage.`);
+                    this.type = 'local';
+                    this.ensureLocalDirs();
+                    return this.readFile(category, filename, isJson);
+                }
                 throw err;
             }
         }
@@ -184,7 +214,10 @@ class StorageService {
                 if (err.name === 'NotFound' || err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
                     return false;
                 }
-                throw err;
+                console.warn(`⚠️ [Storage] S3 exists check failed (${err.message}). Falling back to LOCAL storage.`);
+                this.type = 'local';
+                this.ensureLocalDirs();
+                return this.existsFile(category, filename);
             }
         }
     }
@@ -200,10 +233,20 @@ class StorageService {
             }
         } else {
             const key = this._resolve(category, filename);
-            await this.s3.send(new DeleteObjectCommand({
-                Bucket: this.bucket,
-                Key: key
-            }));
+            try {
+                await this.s3.send(new DeleteObjectCommand({
+                    Bucket: this.bucket,
+                    Key: key
+                }));
+            } catch (err) {
+                console.warn(`⚠️ [Storage] S3 delete failed (${err.message}). Falling back to LOCAL storage.`);
+                this.type = 'local';
+                this.ensureLocalDirs();
+                const filePath = this._resolve(category, filename);
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            }
         }
     }
 
@@ -228,18 +271,33 @@ class StorageService {
             const sourceKey = this._resolve(fromCategory, filename);
             const destKey = this._resolve(toCategory, filename);
             
-            // Copy Object
-            await this.s3.send(new CopyObjectCommand({
-                Bucket: this.bucket,
-                CopySource: encodeURIComponent(`${this.bucket}/${sourceKey}`),
-                Key: destKey
-            }));
-            
-            // Delete Original
-            await this.s3.send(new DeleteObjectCommand({
-                Bucket: this.bucket,
-                Key: sourceKey
-            }));
+            try {
+                // Copy Object
+                await this.s3.send(new CopyObjectCommand({
+                    Bucket: this.bucket,
+                    CopySource: encodeURIComponent(`${this.bucket}/${sourceKey}`),
+                    Key: destKey
+                }));
+                
+                // Delete Original
+                await this.s3.send(new DeleteObjectCommand({
+                    Bucket: this.bucket,
+                    Key: sourceKey
+                }));
+            } catch (err) {
+                console.warn(`⚠️ [Storage] S3 move failed (${err.message}). Falling back to LOCAL storage.`);
+                this.type = 'local';
+                this.ensureLocalDirs();
+                const fromPath = this._resolve(fromCategory, filename);
+                const toPath = this._resolve(toCategory, filename);
+                const destDir = path.dirname(toPath);
+                if (!fs.existsSync(destDir)) {
+                    fs.mkdirSync(destDir, { recursive: true });
+                }
+                if (fs.existsSync(fromPath)) {
+                    fs.renameSync(fromPath, toPath);
+                }
+            }
         }
     }
 
@@ -257,19 +315,26 @@ class StorageService {
             return files.filter(f => f.toLowerCase().endsWith(extension.toLowerCase()));
         } else {
             const prefix = CATEGORY_MAP_S3[category];
-            const response = await this.s3.send(new ListObjectsV2Command({
-                Bucket: this.bucket,
-                Prefix: prefix
-            }));
-            
-            const contents = response.Contents || [];
-            const files = contents.map(c => {
-                // Strip the prefix to get the filename
-                return c.Key.slice(prefix.length);
-            }).filter(Boolean); // Filter out the directory folder object itself
-            
-            if (!extension) return files;
-            return files.filter(f => f.toLowerCase().endsWith(extension.toLowerCase()));
+            try {
+                const response = await this.s3.send(new ListObjectsV2Command({
+                    Bucket: this.bucket,
+                    Prefix: prefix
+                }));
+                
+                const contents = response.Contents || [];
+                const files = contents.map(c => {
+                    // Strip the prefix to get the filename
+                    return c.Key.slice(prefix.length);
+                }).filter(Boolean); // Filter out the directory folder object itself
+                
+                if (!extension) return files;
+                return files.filter(f => f.toLowerCase().endsWith(extension.toLowerCase()));
+            } catch (err) {
+                console.warn(`⚠️ [Storage] S3 listFiles failed (${err.message}). Falling back to LOCAL storage.`);
+                this.type = 'local';
+                this.ensureLocalDirs();
+                return this.listFiles(category, extension);
+            }
         }
     }
 
@@ -285,11 +350,22 @@ class StorageService {
             return { type: 'path', value: filePath };
         } else {
             const key = this._resolve(category, filename);
-            const response = await this.s3.send(new GetObjectCommand({
-                Bucket: this.bucket,
-                Key: key
-            }));
-            return { type: 'stream', value: response.Body };
+            try {
+                const response = await this.s3.send(new GetObjectCommand({
+                    Bucket: this.bucket,
+                    Key: key
+                }));
+                return { type: 'stream', value: response.Body };
+            } catch (err) {
+                console.warn(`⚠️ [Storage] S3 getStreamOrPath failed (${err.message}). Falling back to LOCAL storage.`);
+                this.type = 'local';
+                this.ensureLocalDirs();
+                const filePath = this._resolve(category, filename);
+                if (!fs.existsSync(filePath)) {
+                    throw new Error(`File not found: ${filePath}`);
+                }
+                return { type: 'path', value: filePath };
+            }
         }
     }
 }

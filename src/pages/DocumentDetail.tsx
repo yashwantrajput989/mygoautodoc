@@ -420,6 +420,11 @@ export default function DocumentDetail() {
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               AI Confidence: <span className="text-success font-semibold italic">High (98%)</span>
+              {(currentDoc.parse_duration_seconds || currentDoc.data?.parse_duration_seconds) && (
+                <span className="text-muted-foreground ml-2">
+                  | Parse Time: <span className="font-semibold text-foreground">{currentDoc.parse_duration_seconds || currentDoc.data?.parse_duration_seconds}s</span>
+                </span>
+              )}
             </p>
           </div>
         </div>
