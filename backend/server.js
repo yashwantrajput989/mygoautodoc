@@ -4461,7 +4461,6 @@ function cleanAndValidatePrice(priceStr) {
     return '0.00';
 }
 
-const TOKEN_USAGE_PATH = path.join(__dirname, 'token_usage.json');
 
 async function getTokenUsage() {
     try {
