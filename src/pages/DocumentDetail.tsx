@@ -437,7 +437,7 @@ export default function DocumentDetail() {
             <Trash2 className="h-4 w-4" /> Discard
           </button>
 
-          {!isSuccess && !currentDoc?.is_pending && currentDoc?.status !== 'failed_parsing' && (
+          {!currentDoc?.is_pending && currentDoc?.status !== 'failed_parsing' && (
             <button
               onClick={handleSaveChanges}
               disabled={isSavingChanges || isPosting}
@@ -447,22 +447,24 @@ export default function DocumentDetail() {
             </button>
           )}
 
-          {isSuccess ? (
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-2 px-6 py-2 text-sm font-bold bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 rounded shadow-sm animate-in fade-in zoom-in-95 duration-200">
+          {isSuccess && (
+            <div className="flex items-center gap-2 mr-2">
+              <div className="flex items-center gap-2 px-4 py-2 text-sm font-bold bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 rounded shadow-sm animate-in fade-in zoom-in-95 duration-200">
                 <CheckCircle2 className="h-4 w-4" /> SAP Document: {sapDocNumber || "9000012345"}
               </div>
               {currentDoc?.data?.sap_attachment_status === 'success' ? (
-                <div className="flex items-center gap-1.5 px-4 py-2 text-sm font-bold bg-indigo-500/10 border border-indigo-500/20 text-indigo-500 rounded shadow-sm animate-in fade-in zoom-in-95 duration-200" title="Attachment successfully uploaded to SAP Attachment Service.">
-                  <Paperclip className="h-4 w-4" /> Attachment Uploaded
+                <div className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold bg-indigo-500/10 border border-indigo-500/20 text-indigo-500 rounded shadow-sm" title="Attachment successfully uploaded to SAP Attachment Service.">
+                  <Paperclip className="h-3.5 w-3.5" /> Attachment Uploaded
                 </div>
               ) : currentDoc?.data?.sap_attachment_status === 'failed' ? (
-                <div className="flex items-center gap-1.5 px-4 py-2 text-sm font-bold bg-destructive/10 border border-destructive/20 text-destructive rounded shadow-sm animate-in fade-in zoom-in-95 duration-200" title={`SAP Attachment Upload Failed: ${currentDoc?.data?.sap_attachment_error || 'Unknown attachment error'}`}>
-                  <AlertTriangle className="h-4 w-4" /> Attachment Failed
+                <div className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold bg-destructive/10 border border-destructive/20 text-destructive rounded shadow-sm" title={`SAP Attachment Upload Failed: ${currentDoc?.data?.sap_attachment_error || 'Unknown attachment error'}`}>
+                  <AlertTriangle className="h-3.5 w-3.5" /> Attachment Failed
                 </div>
               ) : null}
             </div>
-          ) : currentDoc?.status === 'failed_parsing' ? (
+          )}
+
+          {currentDoc?.status === 'failed_parsing' ? (
             <button
               onClick={handleReparse}
               disabled={isReparsing}
@@ -478,7 +480,7 @@ export default function DocumentDetail() {
               className="flex items-center gap-2 px-6 py-2 text-sm font-bold bg-primary text-primary-foreground rounded shadow-sm hover:shadow-md transition-all active:scale-[0.98] disabled:opacity-50"
             >
               <CheckCircle2 className={`h-4 w-4 ${isPosting ? 'animate-spin' : ''}`} />
-              {isPosting ? "Posting to SAP..." : "Approve & Send to SAP"}
+              {isPosting ? "Posting to SAP..." : isSuccess ? "Re-post to SAP" : "Approve & Send to SAP"}
             </button>
           )}
         </div>
@@ -1451,22 +1453,21 @@ export default function DocumentDetail() {
                     </span>
 
                     {/* Refresh Payload Button */}
-                    {!isSuccess && (
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleRefreshPayload(); }}
-                        disabled={isRefreshingPayload || isSavingChanges}
-                        title="Save current edits and regenerate the SAP payload"
-                        className={cn(
-                          "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all shadow-sm",
-                          "bg-primary/10 border-primary/20 text-primary hover:bg-primary/20 hover:border-primary/40 hover:shadow-md active:scale-[0.97]",
-                          "disabled:opacity-50 disabled:cursor-not-allowed"
-                        )}
-                      >
-                        <RefreshCw className={cn("h-3 w-3", isRefreshingPayload && "animate-spin")} />
-                        {isRefreshingPayload ? "Refreshing..." : "Refresh Payload"}
-                      </button>
-                    )}
+                    {/* Refresh Payload Button */}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); handleRefreshPayload(); }}
+                      disabled={isRefreshingPayload || isSavingChanges}
+                      title="Save current edits and regenerate the SAP payload"
+                      className={cn(
+                        "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all shadow-sm",
+                        "bg-primary/10 border-primary/20 text-primary hover:bg-primary/20 hover:border-primary/40 hover:shadow-md active:scale-[0.97]",
+                        "disabled:opacity-50 disabled:cursor-not-allowed"
+                      )}
+                    >
+                      <RefreshCw className={cn("h-3 w-3", isRefreshingPayload && "animate-spin")} />
+                      {isRefreshingPayload ? "Refreshing..." : "Refresh Payload"}
+                    </button>
 
                     <button
                       type="button"
@@ -1508,48 +1509,46 @@ export default function DocumentDetail() {
                           </button>
                         </div>
 
-                        {!isSuccess && (
-                          <div className="space-y-3">
-                            {/* Info hint */}
-                            <div className="p-2.5 bg-amber-500/5 rounded-lg border border-amber-500/10 flex items-start gap-2">
-                              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
-                              <p className="text-[10px] text-amber-600/90 leading-relaxed font-medium">
-                                Use <strong className="text-amber-700">Refresh Payload</strong> to preview changes, then <strong className="text-amber-700">Push to SAP</strong> to submit.
-                              </p>
-                            </div>
-
-                            {/* Action row: Refresh + Push */}
-                            <div className="flex items-center gap-2 pt-1">
-                              <button
-                                type="button"
-                                onClick={handleRefreshPayload}
-                                disabled={isRefreshingPayload || isSavingChanges}
-                                className={cn(
-                                  "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold border transition-all shadow-sm",
-                                  "bg-muted/50 border-border text-foreground hover:bg-muted hover:border-border/80 hover:shadow-md active:scale-[0.98]",
-                                  "disabled:opacity-50 disabled:cursor-not-allowed"
-                                )}
-                              >
-                                <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingPayload && "animate-spin")} />
-                                {isRefreshingPayload ? "Refreshing..." : "Refresh Payload"}
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={handleApprove}
-                                disabled={isPosting || isLoading || currentDoc?.is_pending || isRefreshingPayload}
-                                className={cn(
-                                  "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all shadow-sm",
-                                  "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-md active:scale-[0.98]",
-                                  "disabled:opacity-50 disabled:cursor-not-allowed"
-                                )}
-                              >
-                                <Zap className={cn("h-3.5 w-3.5", isPosting && "animate-spin")} />
-                                {isPosting ? "Pushing to SAP..." : "Push to SAP"}
-                              </button>
-                            </div>
+                        <div className="space-y-3">
+                          {/* Info hint */}
+                          <div className="p-2.5 bg-amber-500/5 rounded-lg border border-amber-500/10 flex items-start gap-2">
+                            <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+                            <p className="text-[10px] text-amber-600/90 leading-relaxed font-medium">
+                              Use <strong className="text-amber-700">Refresh Payload</strong> to preview changes, then <strong className="text-amber-700">{isSuccess ? "Re-push to SAP" : "Push to SAP"}</strong> to submit.
+                            </p>
                           </div>
-                        )}
+
+                          {/* Action row: Refresh + Push */}
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleRefreshPayload}
+                              disabled={isRefreshingPayload || isSavingChanges}
+                              className={cn(
+                                "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold border transition-all shadow-sm",
+                                "bg-muted/50 border-border text-foreground hover:bg-muted hover:border-border/80 hover:shadow-md active:scale-[0.98]",
+                                "disabled:opacity-50 disabled:cursor-not-allowed"
+                              )}
+                            >
+                              <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingPayload && "animate-spin")} />
+                              {isRefreshingPayload ? "Refreshing..." : "Refresh Payload"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleApprove}
+                              disabled={isPosting || isLoading || currentDoc?.is_pending || isRefreshingPayload}
+                              className={cn(
+                                "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all shadow-sm",
+                                "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-md active:scale-[0.98]",
+                                "disabled:opacity-50 disabled:cursor-not-allowed"
+                              )}
+                            >
+                              <Zap className={cn("h-3.5 w-3.5", isPosting && "animate-spin")} />
+                              {isPosting ? "Pushing to SAP..." : isSuccess ? "Re-push to SAP" : "Push to SAP"}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <div className="py-6 text-center text-xs text-muted-foreground font-medium">
