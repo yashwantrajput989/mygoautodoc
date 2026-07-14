@@ -4414,6 +4414,46 @@ function escapeLiteralNewlines(jsonString) {
     return result;
 }
 
+function extractFirstJSONObject(str) {
+    const firstBrace = str.indexOf('{');
+    if (firstBrace === -1) return null;
+    
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    
+    for (let i = firstBrace; i < str.length; i++) {
+        const char = str[i];
+        
+        if (escape) {
+            escape = false;
+            continue;
+        }
+        
+        if (char === '\\') {
+            escape = true;
+            continue;
+        }
+        
+        if (char === '"') {
+            inString = !inString;
+            continue;
+        }
+        
+        if (!inString) {
+            if (char === '{') {
+                depth++;
+            } else if (char === '}') {
+                depth--;
+                if (depth === 0) {
+                    return str.substring(firstBrace, i + 1);
+                }
+            }
+        }
+    }
+    return null;
+}
+
 function parseAIJSONResponse(text) {
     if (!text) throw new Error('Empty AI response');
     let cleaned = text.trim();
@@ -4429,11 +4469,10 @@ function parseAIJSONResponse(text) {
         }
     }
 
-    // Extract actual JSON boundaries
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    // Extract actual JSON boundaries robustly
+    const extracted = extractFirstJSONObject(cleaned);
+    if (extracted) {
+        cleaned = extracted;
     }
 
     // Tier 1: Try parsing the cleaned text directly
