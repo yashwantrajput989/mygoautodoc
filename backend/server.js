@@ -921,7 +921,7 @@ async function enrichDocumentWithApis(docData) {
         setField("payment_terms", "0001", "Default Fallback");
         setField("inco_terms", "FOB", "Default Fallback");
 
-        const resolvedPoNum = docData.header.customer_po_number || docData.header.po_number || docData.header.purchase_order_number || docData.header.order_reference || "AUTO_PO";
+        const resolvedPoNum = docData.header.customer_po_number || docData.header.po_number || docData.header.purchase_order_number || docData.header.order_reference || "";
         setField("customer_po_number", resolvedPoNum, "Default Fallback");
     } else {
         // Supplier Number
@@ -950,9 +950,9 @@ async function enrichDocumentWithApis(docData) {
         const resolvedDate = docData.header.invoice_date || docData.header.po_date || emailMeta.received_at || todayStr;
         setField("invoice_date", resolvedDate, "Default Fallback");
 
-        const resolvedPoNum = docData.header.po_number || docData.header.customer_po_number || "AUTO_PO";
+        const resolvedPoNum = docData.header.po_number || docData.header.customer_po_number || "";
         setField("po_number", resolvedPoNum, "Default Fallback");
-        setField("invoice_reference", resolvedPoNum || "INV-REF-AUTO", "Default Fallback");
+        setField("invoice_reference", resolvedPoNum, "Default Fallback");
         setField("po_type", "PO", "Default Fallback");
     }
     
@@ -1162,12 +1162,11 @@ async function enrichDocumentWithApis(docData) {
                     sap_material_description: sapMatDesc
                 };
             } else {
-                const defaultMat = idx === 0 ? "ARFL100AM" : "GMB515BAM";
-                const fallbackMat = itemCustMat || extractMaterial(itemDesc, defaultMat);
+                const fallbackMat = itemCustMat || "";
                 
-                console.log(`⚠️ [API Enrichment] No CMIR match for line item ${idx+1}. Using fallback SKU: ${fallbackMat}`);
+                console.log(`⚠️ [API Enrichment] No CMIR match for line item ${idx+1}. Leaving SAP SKU unresolved.`);
 
-                const explanation = `CMIR Query: Sent CustomerMaterial='${itemCustMat || 'N/A'}' & MaterialDescription='${itemDesc || 'N/A'}'. No match in Master Data. Staged default fallback SKU: '${fallbackMat}'.`;
+                const explanation = `CMIR Query: Sent CustomerMaterial='${itemCustMat || 'N/A'}' & MaterialDescription='${itemDesc || 'N/A'}'. No match in Master Data. SAP SKU is unresolved.`;
                 
                 docData.line_item_origins[idx] = {
                     sap_material_number: explanation,
@@ -1177,7 +1176,7 @@ async function enrichDocumentWithApis(docData) {
                 return {
                     ...item,
                     sap_material_number: fallbackMat,
-                    sap_material_description: itemDesc || `${fallbackMat} - Material Desc`
+                    sap_material_description: itemDesc || ""
                 };
             }
         });
@@ -3013,7 +3012,7 @@ function buildSAPPayload(docData, settings) {
 
     // ─── BACKWARD COMPATIBLE FALLBACK PAYLOADS ────────────────────
     const poDate = docData.header?.order_received_date || docData.header?.requested_date || docData.header?.invoice_date || docData.header?.po_date || "";
-    const poNum = docData.header?.customer_po_number || docData.header?.po_number || docData.header?.purchase_order_number || docData.header?.order_reference || "AUTO_PO";
+    const poNum = docData.header?.customer_po_number || docData.header?.po_number || docData.header?.purchase_order_number || docData.header?.order_reference || "";
     const currency = docData.totals?.currency || "USD";
     const partnerName = docData.header?.supplier_name || "BP-CUST";
     const defaultPaymentTerms = settings.sales_order_payment_terms || "0003";
@@ -3117,17 +3116,7 @@ function buildSAPPayload(docData, settings) {
             };
         });
 
-        if (lineItems.length === 0) {
-            lineItems.push({
-                Doc_typ: settings.sales_order_default_type || "OR1",
-                Item_num: "10",
-                Material1: "ARFL100AM",
-                Quantity: "1",
-                Uom: "EA",
-                Deliv_date: formatSAPDate(poDate),
-                Price: "100"
-            });
-        }
+
 
         return {
             Doc_typ: settings.sales_order_default_type || "OR1",
@@ -3315,7 +3304,7 @@ app.post('/api/documents/:id/post-sap', async (req, res) => {
 
             // Pre-post Duplicate Check: query SAP DB for this PO number
             const poNum = payload.PurchaseOrderByCustomer;
-            if (poNum && poNum !== "AUTO_PO") {
+            if (poNum && poNum !== "AUTO_PO" && poNum !== "") {
                 const checkUrl = `${baseUrl.replace(/\/$/, '')}/odata/v4/sales-order/SalesOrders?$filter=PurchaseOrderByCustomer eq '${encodeURIComponent(poNum)}'`;
                 console.log(`🔍 [BTP] Pre-check: Querying SAP DB for duplicates: ${checkUrl}`);
                 try {
@@ -4950,7 +4939,7 @@ Instructions:
                     const durationMs = Date.now() - startParseTime;
                     parseDurationSec = (durationMs / 1000).toFixed(1);
 
-                    const aiData = parseAIJSONResponse(responseText);
+                    let aiData = parseAIJSONResponse(responseText);
                     if (aiData) {
                         aiData.parse_duration_seconds = parseDurationSec;
                     }
@@ -5067,9 +5056,83 @@ Instructions:
                     }
 
                     if (isLegit) {
-                        aiData.status = 'ready_to_send';
-                        await storageService.moveFile('downloads', 'sap_docs', fname);
-                        await storageService.saveFile('sap_json', baseName + '.json', aiData, true);
+                        // Dynamically enrich data to resolve business partners and material SKU via CMIR
+                        try {
+                            aiData = await enrichDocumentWithApis(aiData);
+                        } catch (enrichErr) {
+                            console.warn(`⚠️ [AI Ingestion] Enrichment lookup failed for ${fname}:`, enrichErr.message);
+                        }
+
+                        // Strict scanning validation check
+                        let hasRequiredInfo = true;
+                        let parseErrorReason = "";
+
+                        if (!aiData || typeof aiData !== 'object') {
+                            hasRequiredInfo = false;
+                            parseErrorReason = "AI parsed data is not a valid object.";
+                        } else {
+                            const context = aiData.header?.context || emailMeta?.expected_doc_type || "";
+                            const isSalesOrder = !(context.toLowerCase().includes('invoice') || context.toLowerCase().includes('vendor'));
+
+                            if (isSalesOrder) {
+                                const poNum = aiData.header?.customer_po_number || aiData.header?.po_number || aiData.header?.purchase_order_number || aiData.header?.order_reference;
+                                if (!poNum || String(poNum).trim() === "") {
+                                    hasRequiredInfo = false;
+                                    parseErrorReason = "Mandatory Customer PO Number is missing from scanned document.";
+                                }
+                            } else {
+                                const invRef = aiData.header?.invoice_reference || aiData.header?.po_number || aiData.header?.customer_po_number;
+                                if (!invRef || String(invRef).trim() === "") {
+                                    hasRequiredInfo = false;
+                                    parseErrorReason = "Mandatory Invoice Reference / PO Number is missing from scanned document.";
+                                }
+                            }
+
+                            if (!aiData.line_items || !Array.isArray(aiData.line_items) || aiData.line_items.length === 0) {
+                                hasRequiredInfo = false;
+                                parseErrorReason = "Scanned document has no valid line items.";
+                            } else {
+                                // Verify that all line items have resolved SAP Material SKUs
+                                const unresolvedItem = aiData.line_items.find(item => {
+                                    const sku = item.sap_material_number || item.customer_material_number || item.supplier_material_number;
+                                    return !sku || String(sku).trim() === "";
+                                });
+                                if (unresolvedItem) {
+                                    hasRequiredInfo = false;
+                                    parseErrorReason = "One or more line items have unresolved SAP SKU / CMIR matches.";
+                                }
+                            }
+                        }
+
+                        if (hasRequiredInfo) {
+                            aiData.status = 'ready_to_send';
+                            await storageService.moveFile('downloads', 'sap_docs', fname);
+                            await storageService.saveFile('sap_json', baseName + '.json', aiData, true);
+                        } else {
+                            console.log(`⚠️ AI parsing failed validation for ${fname}: ${parseErrorReason}. Saving as failed_parsing.`);
+                            const failedData = {
+                                human_readable_id: getHumanReadableId(baseName),
+                                is_legit_invoice: false,
+                                status: 'failed_parsing',
+                                parse_duration_seconds: parseDurationSec,
+                                error: parseErrorReason,
+                                header: {
+                                    context: emailMeta?.expected_doc_type || aiData?.header?.context || 'Unknown',
+                                    supplier_name: aiData?.header?.supplier_name || 'AI Ingested (Unrecognized)',
+                                    customer_po_number: aiData?.header?.customer_po_number || ""
+                                },
+                                totals: {
+                                    total_amount: aiData?.totals?.total_amount || 'Error',
+                                    currency: aiData?.totals?.currency || ''
+                                },
+                                email_metadata: emailMeta,
+                                is_body_only: isBodyOnly,
+                                exceptions: parseErrorReason,
+                                line_items: aiData?.line_items || []
+                            };
+                            await storageService.moveFile('downloads', 'sap_docs', fname);
+                            await storageService.saveFile('sap_json', baseName + '.json', failedData, true);
+                        }
                     } else {
                         console.log(`⚠️ AI determined document ${fname} is not legit. Saving as failed_parsing instead of archive_junk.`);
                         const failedData = {
