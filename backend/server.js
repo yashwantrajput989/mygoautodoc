@@ -1121,14 +1121,14 @@ async function enrichDocumentWithApis(docData) {
 
             if (itemCustMat && records.length > 0) {
                 matchedMat = records.find(r => {
-                    const rCustMat = String(r.CustomerMaterial || r.Cust_mat || r.CustomerMaterialNumber || '').trim();
+                    const rCustMat = String(r.CustomerMaterial || r.Cust_mat || r.CustomerMaterialNumber || r.Material_number || '').trim();
                     return rCustMat && rCustMat.toLowerCase() === itemCustMat.toLowerCase();
                 });
             }
 
             if (!matchedMat && itemDesc && records.length > 0) {
                 matchedMat = records.find(r => {
-                    const rDesc = String(r.MaterialDescription || r.Mat_desc || r.MaterialName || r.Description || '').trim();
+                    const rDesc = String(r.MaterialDescription || r.Mat_desc || r.MaterialName || r.Description || r.Mat_description || '').trim();
                     return rDesc && (
                         rDesc.toLowerCase().includes(itemDesc.toLowerCase()) ||
                         itemDesc.toLowerCase().includes(rDesc.toLowerCase())
@@ -1138,14 +1138,14 @@ async function enrichDocumentWithApis(docData) {
 
             if (!matchedMat && itemCustMat && records.length > 0) {
                 matchedMat = records.find(r => {
-                    const rMat = String(r.Material || r.Mat_no || r.MaterialNumber || '').trim();
+                    const rMat = String(r.Material || r.Mat_no || r.MaterialNumber || r.Sap_Material || '').trim();
                     return rMat && rMat.toLowerCase() === itemCustMat.toLowerCase();
                 });
             }
 
             if (matchedMat) {
-                const sapMatNo = matchedMat.Material || matchedMat.Mat_no || matchedMat.MaterialNumber || matchedMat.CustomerMaterial;
-                const sapMatDesc = matchedMat.MaterialDescription || matchedMat.Mat_desc || matchedMat.MaterialName || matchedMat.Description || '';
+                const sapMatNo = matchedMat.Sap_Material || matchedMat.Material || matchedMat.Mat_no || matchedMat.MaterialNumber || matchedMat.CustomerMaterial || matchedMat.Material_number;
+                const sapMatDesc = matchedMat.Mat_description || matchedMat.MaterialDescription || matchedMat.Mat_desc || matchedMat.MaterialName || matchedMat.Description || '';
                 
                 console.log(`✅ [API Enrichment] Matched line item ${idx+1} ("${itemDesc}") to SAP Material SKU: ${sapMatNo}`);
 
@@ -1382,6 +1382,90 @@ app.get('/api/sap/business-partner', async (req, res) => {
         res.status(500).json({ error: "Failed to query SAP Business Partner API", details: err.message });
     }
 });
+
+app.get('/api/sap/cmir', async (req, res) => {
+    try {
+        const settings = await getSettings();
+        const apiConfigs = settings.api_configs || [];
+        const matConfig = apiConfigs.find(c => c.status === 'Active' && c.context === 'CustomerMaterialInfo');
+        
+        let records = [];
+        let sourceApiName = "";
+        let isMock = false;
+        let fetchError = null;
+
+        const fallbackRecords = [
+            { CustomerMaterial: "ARFL100AM", Material: "ARFL100AM", MaterialDescription: "Air Filter Premium SKU-100", Cust_mat: "ARFL100AM", Mat_no: "ARFL100AM", Mat_desc: "Air Filter Premium SKU-100" },
+            { CustomerMaterial: "GMB515BAM", Material: "GMB515BAM", MaterialDescription: "Gearbox High-Torque M-515", Cust_mat: "GMB515BAM", Mat_no: "GMB515BAM", Mat_desc: "Gearbox High-Torque M-515" },
+            { CustomerMaterial: "MAT-CUST-100", Material: "ARFL100AM", MaterialDescription: "Air Filter Premium SKU-100", Cust_mat: "MAT-CUST-100", Mat_no: "ARFL100AM", Mat_desc: "Air Filter Premium SKU-100" },
+            { CustomerMaterial: "MAT-CUST-200", Material: "GMB515BAM", MaterialDescription: "Gearbox High-Torque M-515", Cust_mat: "MAT-CUST-200", Mat_no: "GMB515BAM", Mat_desc: "Gearbox High-Torque M-515" },
+            { CustomerMaterial: "CUST-MAT-01", Material: "ARFL100AM", MaterialDescription: "Air Filter Premium SKU-100", Cust_mat: "CUST-MAT-01", Mat_no: "ARFL100AM", Mat_desc: "Air Filter Premium SKU-100" },
+            { CustomerMaterial: "CUST-MAT-02", Material: "GMB515BAM", MaterialDescription: "Gearbox High-Torque M-515", Cust_mat: "CUST-MAT-02", Mat_no: "GMB515BAM", Mat_desc: "Gearbox High-Torque M-515" }
+        ];
+
+        if (matConfig) {
+            try {
+                console.log(`📡 [API Lookup Route] Querying Customer Material Info API (CMIR)...`);
+                const matResult = await executeODataRequest(matConfig, 'CustMatRecords');
+                
+                if (matResult) {
+                    if (Array.isArray(matResult)) {
+                        records = matResult;
+                    } else if (matResult.value && Array.isArray(matResult.value)) {
+                        records = matResult.value;
+                    } else if (matResult.d) {
+                        if (Array.isArray(matResult.d)) {
+                            records = matResult.d;
+                        } else if (matResult.d.results && Array.isArray(matResult.d.results)) {
+                            records = matResult.d.results;
+                        } else if (typeof matResult.d === 'object') {
+                            records = [matResult.d];
+                        }
+                    } else if (matResult.results && Array.isArray(matResult.results)) {
+                        records = matResult.results;
+                    } else if (typeof matResult === 'object') {
+                        const arrayProp = Object.values(matResult).find(v => Array.isArray(v));
+                        if (arrayProp) {
+                            records = arrayProp;
+                        } else {
+                            records = [matResult];
+                        }
+                    }
+                }
+                sourceApiName = matConfig.name || "CustomerMaterialInfo API";
+            } catch (matErr) {
+                console.error(`⚠️ [API Lookup Route] CMIR API fetch failed, falling back to local master records:`, matErr.message);
+                records = fallbackRecords;
+                sourceApiName = "CMIR Local Database (API Fallback)";
+                isMock = true;
+                fetchError = matErr.message;
+            }
+        } else {
+            console.log(`ℹ️ [API Lookup Route] No active CMIR API config, using local master records.`);
+            records = fallbackRecords;
+            sourceApiName = "CMIR Local Master Data";
+            isMock = true;
+        }
+
+        res.json({
+            success: true,
+            records,
+            source: sourceApiName,
+            isMock,
+            fetchError,
+            activeConfig: matConfig ? {
+                id: matConfig.id,
+                name: matConfig.name,
+                status: matConfig.status,
+                endpoint: matConfig.endpoint
+            } : null
+        });
+    } catch (err) {
+        console.error(`❌ [API Lookup Route] CMIR fetch error:`, err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 
 // ─── SETTINGS ROUTES ─────────────────────────────────────────────
 
@@ -2894,8 +2978,8 @@ function buildSAPPayload(docData, settings) {
                 }
             });
 
-            if (!itemPayload.hasOwnProperty('MaterialDescription')) {
-                itemPayload.MaterialDescription = item.material_description || item.sap_material_description || "";
+            if (!itemPayload.hasOwnProperty('Mat_desc')) {
+                itemPayload.Mat_desc = item.material_description || item.sap_material_description || "";
             }
 
             if (resolvedContext === 'SalesOrder') {
@@ -2956,7 +3040,7 @@ function buildSAPPayload(docData, settings) {
                 MaterialByCustomer: material,
                 RequestedQuantity: qty,
                 RequestedQuantityUnit: uom,
-                MaterialDescription: item.material_description || item.sap_material_description || ""
+                Mat_desc: item.material_description || item.sap_material_description || ""
             };
             if (item.plant || docData.header?.plant) {
                 itemPayload.ProductionPlant = item.plant || docData.header?.plant;
@@ -3029,7 +3113,7 @@ function buildSAPPayload(docData, settings) {
                 Uom: uom,
                 Deliv_date: formatSAPDate(docData.header?.requested_date || docData.header?.requested_delivery_date || poDate),
                 Price: price,
-                MaterialDescription: item.material_description || item.sap_material_description || ""
+                Mat_desc: item.material_description || item.sap_material_description || ""
             };
         });
 
